@@ -384,7 +384,7 @@ def _call_gemini(user_text: str) -> dict[str, Any]:
     }
 
     try:
-        with httpx.Client(timeout=REQUEST_TIMEOUT_SECONDS, http2=True) as client:
+        with httpx.Client(timeout=REQUEST_TIMEOUT_SECONDS) as client:
             response = client.post(GOOGLE_API_URL, headers=headers, json=payload)
 
             if response.status_code >= 400:
