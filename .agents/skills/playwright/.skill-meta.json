@@ -1,0 +1,13 @@
+{
+  "sourceType": "github",
+  "source": "github",
+  "url": "https://github.com/openai/skills",
+  "repo": "openai/skills",
+  "ref": null,
+  "subpath": "skills/.curated/playwright",
+  "installSource": "openai/skills/skills/.curated/playwright",
+  "skillName": "playwright",
+  "scope": "global",
+  "installedAt": "2026-03-23T09:20:35.597Z",
+  "updatedAt": "2026-03-23T09:20:35.597Z"
+}

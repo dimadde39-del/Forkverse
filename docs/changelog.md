@@ -1,0 +1,14 @@
+# 2026-04-09
+
+- Реализовано базовое математическое ядро Monte Carlo для `Fork Zero` на `numpy` с полной векторизацией по симуляциям и генератором `np.random.default_rng()`.
+- Принято допущение: месячный net cash flow моделируется нормальным распределением вокруг `monthly_income - monthly_burn`, а стандартное отклонение задаётся как `max(1.0, 10% monthly_income + 5% monthly_burn)`.
+- В `compute_metrics()` добавлена защита API-контракта: все `numpy`-скаляры и массивы конвертируются в native Python `int`/`float`/`list` до возврата в envelope.
+- Для `SpaghettiChart` percentiles `p10` и `p90` сведены в одну `Area` как confidence band без разрыва математического смысла между границами диапазона.
+- Поверх confidence band накладываются до 50 тонких полупрозрачных spaghetti-линий, а медиана `p50` рисуется отдельной контрастной линией поверх всех траекторий.
+- `cashoutMonth` вычисляется через `useMemo()` с clamping минимум до месяца `1`; если `cashoutDateMedian` раньше `startDate`, компонент пишет `console.warn`.
+- Реализован эндпоинт `/api/parse` для serverless-парсинга входящего текста в параметры симуляции.
+- Используем Gemini 3 Flash через прямой HTTP-вызов Google AI Studio без тяжёлых SDK.
+- Внедрена защита от бесконечных диалогов: ответ `needs_clarification` пробрасывает пользователю один уточняющий вопрос.
+- Реализован `SimulatorClient.tsx` с конечным автоматом состояний.
+- Добавлен маппинг сырых данных `/api/simulate` в пропсы `SpaghettiChart` с генерацией `forkSummary` и `startDate`.
+- `app/page.tsx` оставлен серверным компонентом.

@@ -1,0 +1,15 @@
+.next
+node_modules
+.vercel
+.agents/vendor/
+.env
+.env.local
+.env.development.local
+.env.production.local
+.env.test.local
+__pycache__/
+*.py[cod]
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
