@@ -8,6 +8,9 @@
   ],
   "functions": {
     "api/*.py": {
+      "includeFiles": [
+        "prompts/**"
+      ],
       "memory": 1024,
       "maxDuration": 30
     }

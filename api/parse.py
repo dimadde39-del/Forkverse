@@ -19,7 +19,7 @@ SCHEMA_VERSION: Final[str] = "2026-04"
 MAX_PAYLOAD_BYTES: Final[int] = 1_000_000
 MODEL_NAME: Final[str] = "gemini-3-flash-preview"
 REQUEST_TIMEOUT_SECONDS: Final[float] = 20.0
-PROJECT_ROOT: Final[Path] = Path(__file__).resolve().parent.parent
+PROJECT_ROOT: Final[Path] = Path(__file__).parent.parent.resolve()
 PROMPT_PATH: Final[Path] = PROJECT_ROOT / "prompts" / "parser_v1.txt"
 ENV_PATH: Final[Path] = PROJECT_ROOT / ".env"
 GOOGLE_API_URL: Final[str] = (
@@ -122,14 +122,31 @@ def _build_error(
 @lru_cache(maxsize=1)
 def _load_system_prompt() -> str:
     try:
-        return PROMPT_PATH.read_text(encoding="utf-8").strip()
+        prompt_text = PROMPT_PATH.read_text(encoding="utf-8").strip()
     except FileNotFoundError as exc:
         raise ApiProblem(
             "INTERNAL_ERROR",
             "Parser prompt is not configured",
-            {"path": str(PROMPT_PATH.relative_to(PROJECT_ROOT))},
+            {"path": str(PROMPT_PATH)},
             False,
         ) from exc
+    except OSError as exc:
+        raise ApiProblem(
+            "INTERNAL_ERROR",
+            "Failed to read parser prompt",
+            {"path": str(PROMPT_PATH), "reason": str(exc)},
+            False,
+        ) from exc
+
+    if not prompt_text:
+        raise ApiProblem(
+            "INTERNAL_ERROR",
+            "Parser prompt is empty",
+            {"path": str(PROMPT_PATH)},
+            False,
+        )
+
+    return prompt_text
 
 
 def _require_api_key() -> str:
@@ -323,7 +340,18 @@ def _extract_candidate_text(response_body: dict[str, Any]) -> str:
 
 
 def _call_gemini(user_text: str) -> dict[str, Any]:
-    system_prompt = _load_system_prompt()
+    try:
+        system_prompt = _load_system_prompt()
+    except ApiProblem:
+        raise
+    except Exception as exc:
+        raise ApiProblem(
+            "INTERNAL_ERROR",
+            "Failed to load parser prompt",
+            {"path": str(PROMPT_PATH), "reason": str(exc)},
+            False,
+        ) from exc
+
     api_key = _require_api_key()
 
     payload = {
@@ -369,8 +397,15 @@ def _call_gemini(user_text: str) -> dict[str, Any]:
         raise ApiProblem(
             "INTERNAL_ERROR",
             "LLM request failed",
-            None,
+            {"provider": "google-ai-studio", "reason": str(exc)},
             True,
+        ) from exc
+    except Exception as exc:
+        raise ApiProblem(
+            "INTERNAL_ERROR",
+            "Unexpected LLM request failure",
+            {"provider": "google-ai-studio", "reason": str(exc)},
+            False,
         ) from exc
 
     if response.status_code == 429:
