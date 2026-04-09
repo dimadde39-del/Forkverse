@@ -12,3 +12,4 @@
 - Реализован `SimulatorClient.tsx` с конечным автоматом состояний.
 - Добавлен маппинг сырых данных `/api/simulate` в пропсы `SpaghettiChart` с генерацией `forkSummary` и `startDate`.
 - `app/page.tsx` оставлен серверным компонентом.
+- Исправлена типизация `darkMode` в `tailwind.config.ts`: для Tailwind v4+ используется строковое значение `\"class\"`, совместимое с TypeScript strict mode и production build.

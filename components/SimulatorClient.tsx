@@ -229,34 +229,50 @@ async function postEnvelope<TResponse>(url: string, payload: Record<string, unkn
 }
 
 function normalizeParseResponseData(value: unknown): ParseResponseData {
-  if (!isRecord(value) || typeof value.status !== "string") {
+  if (!isRecord(value)) {
     throw new Error("Invalid parse response");
   }
 
-  if (value.status === "needs_clarification") {
-    if (typeof value.question !== "string" || value.question.trim().length === 0) {
+  const status = value.status;
+  if (typeof status !== "string") {
+    throw new Error("Invalid parse response");
+  }
+
+  const question = value.question;
+  if (status === "needs_clarification") {
+    if (typeof question !== "string") {
+      throw new Error("Invalid parse clarification response");
+    }
+
+    const trimmedQuestion = question.trim();
+    if (trimmedQuestion.length === 0) {
       throw new Error("Invalid parse clarification response");
     }
 
     return {
       status: "needs_clarification",
       params: null,
-      question: value.question.trim(),
+      question: trimmedQuestion,
     };
   }
 
-  if (value.status !== "ready" || !isRecord(value.params)) {
+  if (status !== "ready") {
+    throw new Error("Invalid parse response");
+  }
+
+  const params = value.params;
+  if (!isRecord(params)) {
     throw new Error("Invalid parse response");
   }
 
   return {
     status: "ready",
     params: {
-      initial_capital: normalizeIntField(value.params.initial_capital, "initial_capital", 0),
-      monthly_burn: normalizeIntField(value.params.monthly_burn, "monthly_burn", 0),
-      monthly_income: normalizeIntField(value.params.monthly_income, "monthly_income", 0),
-      months: normalizeIntField(value.params.months, "months", 1),
-      n_simulations: normalizeIntField(value.params.n_simulations, "n_simulations", 1, 4000),
+      initial_capital: normalizeIntField(params.initial_capital, "initial_capital", 0),
+      monthly_burn: normalizeIntField(params.monthly_burn, "monthly_burn", 0),
+      monthly_income: normalizeIntField(params.monthly_income, "monthly_income", 0),
+      months: normalizeIntField(params.months, "months", 1),
+      n_simulations: normalizeIntField(params.n_simulations, "n_simulations", 1, 4000),
     },
     question: null,
   };
@@ -267,20 +283,28 @@ function normalizeSimulationResponseData(value: unknown): SimulationResponseData
     throw new Error("Invalid simulation response");
   }
 
+  const months = value.months;
+  const n_simulations = value.n_simulations;
+  const survival_probability = value.survival_probability;
+  const p10 = value.p10;
+  const p50 = value.p50;
+  const p90 = value.p90;
+  const spaghetti_sample = value.spaghetti_sample;
+
   return {
-    months: normalizeNumberArray(value.months, "months"),
-    n_simulations: normalizeIntField(value.n_simulations, "n_simulations", 1, 4000),
+    months: normalizeNumberArray(months, "months"),
+    n_simulations: normalizeIntField(n_simulations, "n_simulations", 1, 4000),
     survival_probability: (() => {
-      if (!isFiniteNumber(value.survival_probability)) {
+      if (!isFiniteNumber(survival_probability)) {
         throw new Error("Invalid survival_probability returned by API");
       }
 
-      return value.survival_probability;
+      return survival_probability;
     })(),
-    p10: normalizeNumberArray(value.p10, "p10"),
-    p50: normalizeNumberArray(value.p50, "p50"),
-    p90: normalizeNumberArray(value.p90, "p90"),
-    spaghetti_sample: normalizeMatrix(value.spaghetti_sample, "spaghetti_sample"),
+    p10: normalizeNumberArray(p10, "p10"),
+    p50: normalizeNumberArray(p50, "p50"),
+    p90: normalizeNumberArray(p90, "p90"),
+    spaghetti_sample: normalizeMatrix(spaghetti_sample, "spaghetti_sample"),
   };
 }
 
