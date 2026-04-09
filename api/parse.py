@@ -17,7 +17,7 @@ import httpx
 
 SCHEMA_VERSION: Final[str] = "2026-04"
 MAX_PAYLOAD_BYTES: Final[int] = 1_000_000
-MODEL_NAME: Final[str] = "gemini-3-flash"
+MODEL_NAME: Final[str] = "gemini-1.5-flash"
 REQUEST_TIMEOUT_SECONDS: Final[float] = 20.0
 PROJECT_ROOT: Final[Path] = Path(__file__).parent.parent.resolve()
 PROMPT_PATH: Final[Path] = PROJECT_ROOT / "prompts" / "parser_v1.txt"
@@ -417,11 +417,11 @@ def _call_gemini(user_text: str) -> dict[str, Any]:
         )
 
     if response.status_code >= 400:
-        error_text = response.text
+        error_msg = f"LLM API Error {response.status_code}: {response.text}"
         raise ApiProblem(
             "INTERNAL_ERROR",
-            f"LLM API Error {response.status_code}",
-            {"response": error_text},
+            error_msg,
+            None,
             response.status_code >= 500,
         )
 
