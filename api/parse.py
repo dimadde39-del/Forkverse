@@ -26,34 +26,23 @@ GOOGLE_API_URL: Final[str] = (
     f"https://generativelanguage.googleapis.com/v1beta/models/{MODEL_NAME}:generateContent"
 )
 PARSER_RESPONSE_SCHEMA: Final[dict[str, Any]] = {
-    "type": "object",
-    "additionalProperties": False,
+    "type": "OBJECT",
     "properties": {
-        "status": {
-            "type": "string",
-            "enum": ["ready", "needs_clarification"],
-        },
+        "status": {"type": "STRING"},
         "params": {
-            "type": ["object", "null"],
-            "additionalProperties": False,
+            "type": "OBJECT",
             "properties": {
-                "initial_capital": {"type": "integer"},
-                "monthly_burn": {"type": "integer"},
-                "monthly_income": {"type": "integer"},
-                "months": {"type": "integer"},
-                "n_simulations": {"type": "integer"},
+                "initial_capital": {"type": "INTEGER"},
+                "monthly_burn": {"type": "INTEGER"},
+                "monthly_income": {"type": "INTEGER"},
+                "months": {"type": "INTEGER"},
+                "n_simulations": {"type": "INTEGER"},
             },
-            "required": [
-                "initial_capital",
-                "monthly_burn",
-                "monthly_income",
-                "months",
-                "n_simulations",
-            ],
+            "required": ["initial_capital", "monthly_burn", "monthly_income", "months", "n_simulations"],
         },
-        "question": {"type": ["string", "null"]},
+        "question": {"type": "STRING"},
     },
-    "required": ["status", "params", "question"],
+    "required": ["status"],
 }
 
 LOGGER = logging.getLogger(__name__)
