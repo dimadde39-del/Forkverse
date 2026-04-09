@@ -355,7 +355,7 @@ def _call_gemini(user_text: str) -> dict[str, Any]:
     api_key = _require_api_key()
 
     payload = {
-        "system_instruction": {
+        "systemInstruction": {
             "parts": [
                 {
                     "text": system_prompt,
@@ -374,7 +374,7 @@ def _call_gemini(user_text: str) -> dict[str, Any]:
         ],
         "generationConfig": {
             "responseMimeType": "application/json",
-            "responseJsonSchema": PARSER_RESPONSE_SCHEMA,
+            "responseSchema": PARSER_RESPONSE_SCHEMA,
         },
     }
 
@@ -386,44 +386,20 @@ def _call_gemini(user_text: str) -> dict[str, Any]:
     try:
         with httpx.Client(timeout=REQUEST_TIMEOUT_SECONDS, http2=True) as client:
             response = client.post(GOOGLE_API_URL, headers=headers, json=payload)
+
+            if response.status_code >= 400:
+                error_details = response.text
+                raise ApiProblem(
+                    "INTERNAL_ERROR",
+                    f"LLM API Error {response.status_code}: {error_details}",
+                    None,
+                    False,
+                )
+            response.raise_for_status()
     except httpx.TimeoutException as exc:
-        raise ApiProblem(
-            "INTERNAL_ERROR",
-            "LLM request timed out",
-            None,
-            True,
-        ) from exc
-    except httpx.HTTPError as exc:
-        raise ApiProblem(
-            "INTERNAL_ERROR",
-            "LLM request failed",
-            {"provider": "google-ai-studio", "reason": str(exc)},
-            True,
-        ) from exc
-    except Exception as exc:
-        raise ApiProblem(
-            "INTERNAL_ERROR",
-            "Unexpected LLM request failure",
-            {"provider": "google-ai-studio", "reason": str(exc)},
-            False,
-        ) from exc
-
-    if response.status_code == 429:
-        raise ApiProblem(
-            "RATE_LIMITED",
-            "LLM provider rate limit exceeded",
-            None,
-            True,
-        )
-
-    if response.status_code >= 400:
-        error_msg = f"LLM API Error {response.status_code}: {response.text}"
-        raise ApiProblem(
-            "INTERNAL_ERROR",
-            error_msg,
-            None,
-            response.status_code >= 500,
-        )
+        raise ApiProblem("INTERNAL_ERROR", "LLM request timed out", None, True) from exc
+    except httpx.RequestError as exc:
+        raise ApiProblem("INTERNAL_ERROR", f"Network error: {str(exc)}", None, True) from exc
 
     try:
         response_body = response.json()
