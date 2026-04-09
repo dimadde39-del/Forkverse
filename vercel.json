@@ -1,18 +1,7 @@
 {
-  "$schema": "https://openapi.vercel.sh/vercel.json",
-  "rewrites": [
-    {
-      "source": "/api/:path*",
-      "destination": "/api/:path*"
-    }
-  ],
   "functions": {
-    "api/*.py": {
-      "includeFiles": [
-        "prompts/**"
-      ],
-      "memory": 1024,
-      "maxDuration": 30
+    "api/**/*.py": {
+      "includeFiles": "prompts/**"
     }
   }
 }
