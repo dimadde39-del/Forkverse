@@ -1,12 +1,18 @@
 import type { Metadata } from "next";
 import type { ReactNode } from "react";
+import { Inter } from "next/font/google";
 
 import "./globals.css";
 
+const inter = Inter({
+  subsets: ["latin", "cyrillic"],
+  variable: "--font-sans",
+  display: "swap",
+});
 
 export const metadata: Metadata = {
   title: "Fork Zero",
-  description: "ForkVerse Monte Carlo terminal interface",
+  description: "ForkVerse Monte Carlo analytics surface",
 };
 
 export default function RootLayout({
@@ -16,7 +22,7 @@ export default function RootLayout({
 }>) {
   return (
     <html className="dark" lang="en">
-      <body className="min-h-screen bg-[#030b07] font-mono text-emerald-50 antialiased">
+      <body className={`${inter.variable} min-h-screen bg-transparent text-white antialiased`}>
         {children}
       </body>
     </html>

@@ -24,6 +24,37 @@ PROJECT_ROOT: Final[Path] = Path(__file__).parent.parent.resolve()
 PROMPT_PATH: Final[Path] = PROJECT_ROOT / "prompts" / "parser_v1.txt"
 ENV_PATH: Final[Path] = PROJECT_ROOT / ".env"
 GROQ_API_URL: Final[str] = "https://api.groq.com/openai/v1/chat/completions"
+PARSER_RESPONSE_SCHEMA: Final[dict[str, Any]] = {
+    "type": "object",
+    "additionalProperties": False,
+    "properties": {
+        "status": {
+            "type": "string",
+            "enum": ["ready", "needs_clarification"],
+        },
+        "params": {
+            "type": ["object", "null"],
+            "additionalProperties": False,
+            "properties": {
+                "initial_capital": {"type": "integer"},
+                "monthly_burn": {"type": "integer"},
+                "monthly_income": {"type": "integer"},
+                "income_delay_months": {"type": "integer", "default": 0},
+                "months": {"type": "integer"},
+                "n_simulations": {"type": "integer"},
+            },
+            "required": [
+                "initial_capital",
+                "monthly_burn",
+                "monthly_income",
+                "months",
+                "n_simulations",
+            ],
+        },
+        "question": {"type": ["string", "null"]},
+    },
+    "required": ["status", "params", "question"],
+}
 
 LOGGER = logging.getLogger(__name__)
 
@@ -243,8 +274,9 @@ def _normalize_llm_payload(payload: dict[str, Any]) -> dict[str, Any]:
         "initial_capital": _coerce_int("initial_capital", raw_params.get("initial_capital"), minimum=0),
         "monthly_burn": _coerce_int("monthly_burn", raw_params.get("monthly_burn"), minimum=0),
         "monthly_income": _coerce_int("monthly_income", raw_params.get("monthly_income"), minimum=0),
+        "income_delay_months": _coerce_int("income_delay_months", raw_params.get("income_delay_months", 0), minimum=0),
         "months": _coerce_int("months", raw_params.get("months", 6), minimum=1),
-        "n_simulations": _coerce_int("n_simulations", raw_params.get("n_simulations", 4000), minimum=1, maximum=4000),
+        "n_simulations": _coerce_int("n_simulations", raw_params.get("n_simulations", 100), minimum=1, maximum=4000),
     }
 
     return {
@@ -260,12 +292,14 @@ def _run_simulation(
     monthly_burn: int,
     months: int = 36,
     n_simulations: int = 100,
+    income_delay_months: int = 0,
 ) -> list[list[float]]:
     initial_capital_value = _coerce_int("initial_capital", initial_capital, minimum=0)
     monthly_income_value = _coerce_int("monthly_income", monthly_income, minimum=0)
     monthly_burn_value = _coerce_int("monthly_burn", monthly_burn, minimum=0)
     months_value = _coerce_int("months", months, minimum=1)
     n_simulations_value = _coerce_int("n_simulations", n_simulations, minimum=1, maximum=4000)
+    income_delay_months_value = _coerce_int("income_delay_months", income_delay_months, minimum=0)
 
     if initial_capital_value == 0:
         return np.zeros((n_simulations_value, months_value + 1), dtype=np.float64).tolist()
@@ -276,6 +310,11 @@ def _run_simulation(
 
     realized_income = np.maximum(0.0, float(monthly_income_value) * income_noise)
     realized_burn = np.maximum(0.0, float(monthly_burn_value) * burn_noise)
+
+    if income_delay_months_value > 0:
+        delayed_months = min(income_delay_months_value, months_value)
+        realized_income[:, :delayed_months] = 0.0
+
     monthly_changes = realized_income - realized_burn
 
     capital_paths = float(initial_capital_value) + np.cumsum(monthly_changes, axis=1, dtype=np.float64)
@@ -465,6 +504,7 @@ class handler(BaseHTTPRequestHandler):
                     params["monthly_burn"],
                     months=params["months"],
                     n_simulations=params["n_simulations"],
+                    income_delay_months=params.get("income_delay_months", 0),
                 )
                 simulation_data = _build_simulation_response(trajectories)
                 data = {

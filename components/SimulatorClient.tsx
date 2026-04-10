@@ -46,6 +46,7 @@ type SimulationParams = {
   initial_capital: number;
   monthly_burn: number;
   monthly_income: number;
+  income_delay_months: number;
   months: number;
   n_simulations: number;
 };
@@ -99,6 +100,9 @@ const moneyFormatter = new Intl.NumberFormat("ru-RU", {
   maximumFractionDigits: 0,
 });
 
+const panelClass =
+  "rounded-[28px] border border-white/10 bg-white/5 shadow-[0_24px_80px_rgba(0,0,0,0.24)] backdrop-blur-md";
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
 }
@@ -125,6 +129,14 @@ function normalizeIntField(value: unknown, field: string, minimum: number, maxim
   }
 
   return value;
+}
+
+function normalizeOptionalIntField(value: unknown, field: string, minimum: number, maximum?: number): number {
+  if (value === undefined || value === null) {
+    return minimum;
+  }
+
+  return normalizeIntField(value, field, minimum, maximum);
 }
 
 function normalizeNumberArray(value: unknown, field: string): number[] {
@@ -182,6 +194,10 @@ function formatAxisCurrency(value: number): string {
   return `${sign}${moneyFormatter.format(absolute)}`;
 }
 
+function formatDelayMonths(value: number): string {
+  return value > 0 ? `+${value}m` : "Live";
+}
+
 function CustomTooltip({ active, payload }: CustomTooltipProps) {
   if (!active || !payload || payload.length === 0) {
     return null;
@@ -193,14 +209,14 @@ function CustomTooltip({ active, payload }: CustomTooltipProps) {
   }
 
   return (
-    <div className="min-w-[220px] rounded-2xl border border-[#10b981]/25 bg-[rgba(2,8,5,0.96)] px-4 py-3 font-mono shadow-[0_0_0_1px_rgba(16,185,129,0.14),0_0_24px_rgba(0,255,204,0.08),0_20px_60px_rgba(0,0,0,0.7)] ring-1 ring-[#00ffcc]/10 backdrop-blur-xl sm:min-w-[260px]">
-      <div className="text-sm font-semibold text-[#d7fff4]">Месяц {point.month}</div>
-      <div className="mt-3 space-y-1.5 text-[12px] tabular-nums">
-        <div className="text-[#00ffcc]">▲ P90: {formatCurrencySigned(point.p90)} (топ 10%)</div>
-        <div className="text-[#10b981]">◆ P50: {formatCurrencySigned(point.p50)} (медиана)</div>
-        <div className="text-[#7ef7d6]">▼ P10: {formatCurrencySigned(point.p10)} (худшие 10%)</div>
+    <div className="min-w-[232px] rounded-3xl border border-white/12 bg-[rgba(8,8,8,0.88)] px-4 py-3 shadow-[0_18px_60px_rgba(0,0,0,0.34)] backdrop-blur-xl sm:min-w-[268px]">
+      <div className="text-sm font-medium text-white">Месяц {point.month}</div>
+      <div className="mt-3 space-y-1.5 text-[12px] text-white/78">
+        <div className="font-mono tabular-nums text-emerald-200">▲ P90: {formatCurrencySigned(point.p90)} (топ 10%)</div>
+        <div className="font-mono tabular-nums text-emerald-300">◆ P50: {formatCurrencySigned(point.p50)} (медиана)</div>
+        <div className="font-mono tabular-nums text-white/72">▼ P10: {formatCurrencySigned(point.p10)} (худшие 10%)</div>
       </div>
-      <div className="mt-3 border-t border-[#10b981]/15 pt-3 text-[12px] text-[#a7f3d0] tabular-nums">
+      <div className="mt-3 border-t border-white/10 pt-3 font-mono text-[12px] text-white/64 tabular-nums">
         Банкротство в этом месяце: {point.bankruptcyRisk.toFixed(0)}%
       </div>
     </div>
@@ -272,6 +288,7 @@ function normalizeParseResponseData(value: unknown): ParseResponseData {
       initial_capital: normalizeIntField(params.initial_capital, "initial_capital", 0),
       monthly_burn: normalizeIntField(params.monthly_burn, "monthly_burn", 0),
       monthly_income: normalizeIntField(params.monthly_income, "monthly_income", 0),
+      income_delay_months: normalizeOptionalIntField(params.income_delay_months, "income_delay_months", 0, 240),
       months: normalizeIntField(params.months, "months", 1),
       n_simulations: normalizeIntField(params.n_simulations, "n_simulations", 1, 4000),
     },
@@ -411,8 +428,9 @@ export default function SimulatorClient() {
     };
   }, [chartData, simulationData]);
 
+  const readyParams = parseData?.status === "ready" ? parseData.params : null;
   const isBusy = status === "parsing" || status === "simulating";
-  const composerLabel = status === "clarifying" ? "Уточнение" : "План";
+  const composerLabel = status === "clarifying" ? "Clarification" : "Scenario";
   const submitLabel =
     status === "clarifying"
       ? "Submit answer"
@@ -420,7 +438,7 @@ export default function SimulatorClient() {
         ? "Parsing"
         : status === "simulating"
           ? "Simulating"
-          : "Run";
+          : "Run simulation";
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -474,7 +492,7 @@ export default function SimulatorClient() {
         ...current,
         createMessage(
           "ai",
-          `PARSER READY | CAPITAL ${normalizedParseData.params.initial_capital} | BURN ${normalizedParseData.params.monthly_burn} | INCOME ${normalizedParseData.params.monthly_income}`,
+          `PARSER READY | CAPITAL ${normalizedParseData.params.initial_capital} | BURN ${normalizedParseData.params.monthly_burn} | INCOME ${normalizedParseData.params.monthly_income} | DELAY ${normalizedParseData.params.income_delay_months}M`,
         ),
       ]);
 
@@ -501,35 +519,47 @@ export default function SimulatorClient() {
   }
 
   return (
-    <div className="min-h-screen bg-[#020202] font-mono text-[#d7fff4]">
+    <div className="relative isolate min-h-screen overflow-hidden">
+      <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_top_left,rgba(16,185,129,0.12),transparent_28%),radial-gradient(circle_at_78%_18%,rgba(255,255,255,0.06),transparent_22%),radial-gradient(circle_at_70%_78%,rgba(16,185,129,0.1),transparent_24%)]" />
+
       <div className="mx-auto flex min-h-screen max-w-7xl flex-col gap-6 px-4 py-6 sm:px-6 lg:px-8">
-        <header className="rounded-3xl border border-[#10b981]/20 bg-[rgba(3,12,8,0.92)] px-5 py-5 shadow-[0_0_0_1px_rgba(16,185,129,0.12),0_0_28px_rgba(0,255,204,0.08),0_24px_80px_rgba(0,0,0,0.65)] backdrop-blur-2xl">
-          <div className="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
-            <div>
-              <div className="text-[11px] uppercase tracking-[0.32em] text-[#10b981]">ForkVerse Monte Carlo</div>
-              <h1 className="mt-3 text-2xl font-semibold tracking-[-0.02em] text-[#d7fff4]">Neon runway terminal</h1>
-              <p className="mt-2 max-w-2xl text-sm text-[#7ef7d6]">
-                Парсим свободный текст, сразу считаем Monte Carlo и показываем неоновый спагетти-график с band и
-                квантилиями поверх.
+        <header className={`${panelClass} relative overflow-hidden px-5 py-5 sm:px-6 sm:py-6`}>
+          <div className="absolute inset-0 bg-[radial-gradient(circle_at_top,rgba(255,255,255,0.08),transparent_38%),linear-gradient(180deg,rgba(255,255,255,0.04),rgba(255,255,255,0.01))]" />
+
+          <div className="relative flex flex-col gap-6 xl:flex-row xl:items-end xl:justify-between">
+            <div className="max-w-3xl">
+              <div className="inline-flex items-center rounded-full border border-white/10 bg-white/6 px-3 py-1 text-[11px] uppercase tracking-[0.24em] text-emerald-300/90">
+                ForkVerse Monte Carlo
+              </div>
+              <h1 className="mt-4 text-3xl font-semibold tracking-[-0.04em] text-white sm:text-[2.6rem]">
+                Cash runway intelligence with delayed-income modeling
+              </h1>
+              <p className="mt-3 max-w-2xl text-sm leading-6 text-white/62 sm:text-[15px]">
+                Free-form scenario input, strict JSON parsing, Monte Carlo with 50 background trajectories, and a softer
+                Linear/Stripe analytics surface shaped by the real emil-design-eng skill.
               </p>
             </div>
 
-            <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
-              <div className="rounded-2xl border border-[#10b981]/20 bg-[rgba(0,255,204,0.04)] px-3 py-2 text-xs">
-                <div className="uppercase tracking-[0.18em] text-[#10b981]">State</div>
-                <div className="mt-1 tabular-nums text-[#d7fff4]">{status.toUpperCase()}</div>
+            <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+              <div className="rounded-3xl border border-white/10 bg-white/5 px-4 py-3 backdrop-blur-md">
+                <div className="text-[11px] uppercase tracking-[0.18em] text-white/46">State</div>
+                <div className="mt-2 font-mono text-sm text-white tabular-nums">{status.toUpperCase()}</div>
               </div>
-              <div className="rounded-2xl border border-[#10b981]/20 bg-[rgba(0,255,204,0.04)] px-3 py-2 text-xs">
-                <div className="uppercase tracking-[0.18em] text-[#10b981]">Messages</div>
-                <div className="mt-1 tabular-nums text-[#d7fff4]">{chatHistory.length}</div>
+              <div className="rounded-3xl border border-white/10 bg-white/5 px-4 py-3 backdrop-blur-md">
+                <div className="text-[11px] uppercase tracking-[0.18em] text-white/46">Messages</div>
+                <div className="mt-2 font-mono text-sm text-white tabular-nums">{chatHistory.length}</div>
               </div>
-              <div className="rounded-2xl border border-[#10b981]/20 bg-[rgba(0,255,204,0.04)] px-3 py-2 text-xs">
-                <div className="uppercase tracking-[0.18em] text-[#10b981]">Parser</div>
-                <div className="mt-1 tabular-nums text-[#d7fff4]">{parseData ? parseData.status.toUpperCase() : "--"}</div>
+              <div className="rounded-3xl border border-white/10 bg-white/5 px-4 py-3 backdrop-blur-md">
+                <div className="text-[11px] uppercase tracking-[0.18em] text-white/46">Income Delay</div>
+                <div className="mt-2 font-mono text-sm text-white tabular-nums">
+                  {readyParams ? formatDelayMonths(readyParams.income_delay_months) : "--"}
+                </div>
               </div>
-              <div className="rounded-2xl border border-[#10b981]/20 bg-[rgba(0,255,204,0.04)] px-3 py-2 text-xs">
-                <div className="uppercase tracking-[0.18em] text-[#10b981]">Horizon</div>
-                <div className="mt-1 tabular-nums text-[#d7fff4]">{chartSummary ? `${chartSummary.horizon}m` : "--"}</div>
+              <div className="rounded-3xl border border-white/10 bg-white/5 px-4 py-3 backdrop-blur-md">
+                <div className="text-[11px] uppercase tracking-[0.18em] text-white/46">Horizon</div>
+                <div className="mt-2 font-mono text-sm text-white tabular-nums">
+                  {chartSummary ? `${chartSummary.horizon}m` : readyParams ? `${readyParams.months}m` : "--"}
+                </div>
               </div>
             </div>
           </div>
@@ -537,50 +567,63 @@ export default function SimulatorClient() {
 
         <div className="grid gap-6 xl:grid-cols-[360px_minmax(0,1fr)]">
           <section className="space-y-6">
-            <div className="rounded-3xl border border-[#10b981]/20 bg-[rgba(3,12,8,0.92)] shadow-[0_0_0_1px_rgba(16,185,129,0.12),0_0_28px_rgba(0,255,204,0.08),0_24px_80px_rgba(0,0,0,0.65)] backdrop-blur-2xl">
-              <div className="border-b border-[#10b981]/15 px-5 py-4 text-xs uppercase tracking-[0.28em] text-[#10b981]">
-                Input Console
+            <div className={`${panelClass} px-5 py-5 sm:px-6`}>
+              <div className="mb-5 flex items-center justify-between">
+                <div>
+                  <div className="text-[11px] uppercase tracking-[0.22em] text-white/46">{composerLabel}</div>
+                  <div className="mt-2 text-lg font-medium text-white">Scenario composer</div>
+                </div>
+                <div className="rounded-full border border-white/10 bg-white/5 px-3 py-1.5 font-mono text-[11px] text-white/60 tabular-nums">
+                  {readyParams ? `${readyParams.n_simulations} sims` : "100 sims"}
+                </div>
               </div>
-              <form className="space-y-4 px-5 py-5" onSubmit={handleSubmit}>
-                <div className="text-xs uppercase tracking-[0.22em] text-[#10b981]">{composerLabel}</div>
+              <form className="space-y-4" onSubmit={handleSubmit}>
                 {clarificationContext ? (
-                  <div className="rounded-2xl border border-[#00ffcc]/20 bg-[rgba(0,255,204,0.04)] px-4 py-4 text-sm text-[#d7fff4]">
-                    <div className="text-xs uppercase tracking-[0.18em] text-[#00ffcc]">Clarification</div>
-                    <div className="mt-2 whitespace-pre-wrap text-[#d7fff4]">{clarificationContext.question}</div>
+                  <div className="rounded-3xl border border-white/10 bg-white/6 px-4 py-4 text-sm text-white/82">
+                    <div className="text-[11px] uppercase tracking-[0.18em] text-emerald-300/90">Clarification</div>
+                    <div className="mt-2 whitespace-pre-wrap">{clarificationContext.question}</div>
                   </div>
                 ) : null}
                 <textarea
-                  className="h-44 w-full rounded-2xl border border-[#10b981]/20 bg-[linear-gradient(180deg,rgba(3,12,8,0.96),rgba(2,6,4,0.98))] px-4 py-4 text-sm text-[#d7fff4] outline-none placeholder:text-[#10b981] disabled:opacity-60"
+                  className="h-48 w-full rounded-3xl border border-white/10 bg-[linear-gradient(180deg,rgba(255,255,255,0.06),rgba(255,255,255,0.03))] px-4 py-4 text-[15px] text-white outline-none placeholder:text-white/34 disabled:opacity-60"
                   disabled={isBusy}
                   onChange={(event) => setDraft(event.target.value)}
                   placeholder={
                     status === "clarifying"
                       ? "Введите ответ на уточняющий вопрос..."
-                      : "Опишите капитал, burn, income, горизонт и нюансы сценария..."
+                      : "Например: капитал 8 млн, burn 950к, доход 700к, доход стартует через 3 месяца, горизонт 18 месяцев."
                   }
                   spellCheck={false}
                   value={draft}
                 />
-                <button
-                  className="inline-flex rounded-2xl border border-[#00ffcc]/30 bg-[rgba(0,255,204,0.08)] px-4 py-2.5 text-sm font-medium text-[#00ffcc] transition hover:border-[#00ffcc]/50 hover:bg-[rgba(0,255,204,0.12)] disabled:border-[#10b981]/15 disabled:bg-[rgba(16,185,129,0.04)] disabled:text-[#10b981]/60"
-                  disabled={isBusy}
-                  type="submit"
-                >
-                  {submitLabel}
-                </button>
+                <div className="flex flex-wrap items-center gap-3">
+                  <button
+                    className="inline-flex items-center rounded-full border border-white/10 bg-emerald-400/12 px-4 py-2.5 text-sm font-medium text-emerald-200 transition hover:bg-emerald-400/16 disabled:cursor-not-allowed disabled:bg-white/5 disabled:text-white/38"
+                    disabled={isBusy}
+                    type="submit"
+                  >
+                    {submitLabel}
+                  </button>
+                  <div className="text-[13px] text-white/48">
+                    Parser enforces strict JSON, then simulation starts immediately.
+                  </div>
+                </div>
               </form>
               {errorMessage ? (
-                <div className="border-t border-[#10b981]/15 px-5 py-4 text-sm text-[#7ef7d6]">ERROR | {errorMessage}</div>
+                <div className="mt-4 rounded-3xl border border-white/10 bg-white/6 px-4 py-3 text-sm text-white/78">
+                  ERROR | {errorMessage}
+                </div>
               ) : null}
             </div>
 
-            <div className="rounded-3xl border border-[#10b981]/20 bg-[rgba(3,12,8,0.92)] shadow-[0_0_0_1px_rgba(16,185,129,0.12),0_0_28px_rgba(0,255,204,0.08),0_24px_80px_rgba(0,0,0,0.65)] backdrop-blur-2xl">
-              <div className="border-b border-[#10b981]/15 px-5 py-4 text-xs uppercase tracking-[0.28em] text-[#10b981]">
-                Chat History
+            <div className={`${panelClass} px-5 py-5 sm:px-6`}>
+              <div className="mb-5">
+                <div className="text-[11px] uppercase tracking-[0.22em] text-white/46">Conversation</div>
+                <div className="mt-2 text-lg font-medium text-white">Prompt and response history</div>
               </div>
-              <div className="max-h-[420px] space-y-3 overflow-y-auto px-5 py-5">
+              <div className="max-h-[420px] space-y-3 overflow-y-auto pr-1">
                 {chatHistory.length === 0 ? (
-                  <div className="rounded-2xl border border-dashed border-[#10b981]/20 px-4 py-6 text-sm text-[#10b981]">
+                  <div className="rounded-3xl border border-dashed border-white/10 bg-white/4 px-4 py-8 text-sm text-white/42">
                     No messages yet.
                   </div>
                 ) : (
@@ -589,20 +632,12 @@ export default function SimulatorClient() {
                       key={message.id}
                       className={
                         message.role === "user"
-                          ? "rounded-2xl border border-[#00ffcc]/15 bg-[rgba(0,255,204,0.04)] px-4 py-4 text-sm text-[#d7fff4]"
-                          : "rounded-2xl border border-[#10b981]/15 bg-[rgba(16,185,129,0.04)] px-4 py-4 text-sm text-[#d7fff4]"
+                          ? "rounded-3xl border border-white/10 bg-white/6 px-4 py-4 text-sm text-white/88"
+                          : "rounded-3xl border border-white/10 bg-[rgba(16,185,129,0.06)] px-4 py-4 text-sm text-white/82"
                       }
                     >
-                      <div
-                        className={
-                          message.role === "user"
-                            ? "mb-2 text-xs uppercase tracking-[0.2em] text-[#00ffcc]"
-                            : "mb-2 text-xs uppercase tracking-[0.2em] text-[#10b981]"
-                        }
-                      >
-                        {message.role}
-                      </div>
-                      <div className="whitespace-pre-wrap break-words">{message.content}</div>
+                      <div className="mb-2 text-[11px] uppercase tracking-[0.18em] text-white/42">{message.role}</div>
+                      <div className="whitespace-pre-wrap break-words leading-6">{message.content}</div>
                     </div>
                   ))
                 )}
@@ -611,71 +646,98 @@ export default function SimulatorClient() {
           </section>
 
           <section className="space-y-6">
-            <div className="rounded-3xl border border-[#10b981]/20 bg-[rgba(3,12,8,0.92)] shadow-[0_0_0_1px_rgba(16,185,129,0.12),0_0_28px_rgba(0,255,204,0.08),0_24px_80px_rgba(0,0,0,0.65)] backdrop-blur-2xl">
-              <div className="border-b border-[#10b981]/15 px-5 py-4 text-xs uppercase tracking-[0.28em] text-[#10b981]">
-                Monte Carlo Output
+            <div className={`${panelClass} overflow-hidden`}>
+              <div className="border-b border-white/10 px-5 py-4 sm:px-6">
+                <div className="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
+                  <div>
+                    <div className="text-[11px] uppercase tracking-[0.22em] text-white/46">Monte Carlo output</div>
+                    <div className="mt-2 text-xl font-medium text-white">Confidence band with raw trajectory texture</div>
+                    <p className="mt-2 max-w-2xl text-sm leading-6 text-white/56">
+                      Fifty background paths stay visible, while the confidence envelope and quantiles sit above them as
+                      the primary read.
+                    </p>
+                  </div>
+
+                  {chartSummary ? (
+                    <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+                      <div className="rounded-3xl border border-white/10 bg-white/5 px-4 py-3">
+                        <div className="text-[11px] uppercase tracking-[0.18em] text-white/46">Survival</div>
+                        <div className="mt-2 font-mono text-base text-white tabular-nums">
+                          {chartSummary.survivalPct.toFixed(1)}%
+                        </div>
+                      </div>
+                      <div className="rounded-3xl border border-white/10 bg-white/5 px-4 py-3">
+                        <div className="text-[11px] uppercase tracking-[0.18em] text-white/46">Bankruptcy</div>
+                        <div className="mt-2 font-mono text-base text-white tabular-nums">
+                          {chartSummary.bankruptcyPct.toFixed(1)}%
+                        </div>
+                      </div>
+                      <div className="rounded-3xl border border-white/10 bg-white/5 px-4 py-3">
+                        <div className="text-[11px] uppercase tracking-[0.18em] text-white/46">Median End</div>
+                        <div className="mt-2 font-mono text-base text-white tabular-nums">
+                          {formatCurrency(chartSummary.medianEndingBalance)}
+                        </div>
+                      </div>
+                      <div className="rounded-3xl border border-white/10 bg-white/5 px-4 py-3">
+                        <div className="text-[11px] uppercase tracking-[0.18em] text-white/46">Sample / Sims</div>
+                        <div className="mt-2 font-mono text-base text-white tabular-nums">
+                          {chartSummary.sampleSize}/{simulationData?.n_simulations ?? 0}
+                        </div>
+                      </div>
+                    </div>
+                  ) : null}
+                </div>
               </div>
 
               {chartSummary && chartData.length > 0 ? (
-                <div className="space-y-5 px-3 py-3 sm:px-5 sm:py-5">
-                  <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
-                    <div className="rounded-2xl border border-[#10b981]/20 bg-[rgba(0,255,204,0.04)] px-4 py-3">
-                      <div className="text-[11px] uppercase tracking-[0.2em] text-[#10b981]">Survival</div>
-                      <div className="mt-2 text-xl text-[#d7fff4] tabular-nums">{chartSummary.survivalPct.toFixed(1)}%</div>
-                    </div>
-                    <div className="rounded-2xl border border-[#10b981]/20 bg-[rgba(0,255,204,0.04)] px-4 py-3">
-                      <div className="text-[11px] uppercase tracking-[0.2em] text-[#10b981]">Bankruptcy Risk</div>
-                      <div className="mt-2 text-xl text-[#d7fff4] tabular-nums">{chartSummary.bankruptcyPct.toFixed(1)}%</div>
-                    </div>
-                    <div className="rounded-2xl border border-[#10b981]/20 bg-[rgba(0,255,204,0.04)] px-4 py-3">
-                      <div className="text-[11px] uppercase tracking-[0.2em] text-[#10b981]">Median End</div>
-                      <div className="mt-2 text-xl text-[#d7fff4] tabular-nums">{formatCurrency(chartSummary.medianEndingBalance)}</div>
-                    </div>
-                    <div className="rounded-2xl border border-[#10b981]/20 bg-[rgba(0,255,204,0.04)] px-4 py-3">
-                      <div className="text-[11px] uppercase tracking-[0.2em] text-[#10b981]">Sample / Sims</div>
-                      <div className="mt-2 text-xl text-[#d7fff4] tabular-nums">
-                        {chartSummary.sampleSize}/{simulationData?.n_simulations ?? 0}
-                      </div>
-                    </div>
-                  </div>
-
-                  <div className="rounded-2xl border border-[#10b981]/20 bg-[linear-gradient(180deg,rgba(3,12,8,0.98),rgba(2,6,4,0.99))] p-4 shadow-[inset_0_1px_0_rgba(0,255,204,0.04)] md:p-5">
+                <div className="px-3 py-3 sm:px-6 sm:py-6">
+                  <div className="rounded-[30px] border border-white/10 bg-[linear-gradient(180deg,rgba(255,255,255,0.05),rgba(255,255,255,0.02))] p-3 shadow-[inset_0_1px_0_rgba(255,255,255,0.05)] sm:p-4">
                     <div className="mb-4 flex flex-wrap items-start justify-between gap-3">
                       <div>
-                        <div className="text-[11px] uppercase tracking-[0.24em] text-[#10b981]">Confidence Envelope</div>
-                        <h2 className="mt-2 text-lg font-semibold tracking-[-0.02em] text-[#d7fff4]">
-                          Premium Monte Carlo runway
-                        </h2>
+                        <div className="text-[11px] uppercase tracking-[0.22em] text-white/46">Scenario readout</div>
+                        <h2 className="mt-2 text-lg font-medium text-white">Runway distribution</h2>
                       </div>
                       <div className="flex flex-wrap gap-2">
-                        <div className="rounded-full border border-[#10b981]/20 bg-[rgba(0,255,204,0.04)] px-3 py-1.5 text-xs text-[#7ef7d6]">
-                          <span className="tabular-nums text-[#d7fff4]">{chartSummary.horizon}</span> months
+                        <div className="rounded-full border border-white/10 bg-white/5 px-3 py-1.5 font-mono text-[11px] text-white/62 tabular-nums">
+                          {chartSummary.horizon} months
                         </div>
-                        <div className="rounded-full border border-[#10b981]/20 bg-[rgba(0,255,204,0.04)] px-3 py-1.5 text-xs text-[#7ef7d6]">
-                          <span className="tabular-nums text-[#d7fff4]">{formatCurrency(chartSummary.optimisticEndingBalance)}</span> P90
+                        <div className="rounded-full border border-white/10 bg-white/5 px-3 py-1.5 font-mono text-[11px] text-white/62 tabular-nums">
+                          P90 {formatCurrency(chartSummary.optimisticEndingBalance)}
                         </div>
-                        <div className="rounded-full border border-[#10b981]/20 bg-[rgba(0,255,204,0.04)] px-3 py-1.5 text-xs text-[#7ef7d6]">
-                          <span className="tabular-nums text-[#d7fff4]">{formatCurrency(chartSummary.pessimisticEndingBalance)}</span> P10
+                        <div className="rounded-full border border-white/10 bg-white/5 px-3 py-1.5 font-mono text-[11px] text-white/62 tabular-nums">
+                          P10 {formatCurrency(chartSummary.pessimisticEndingBalance)}
                         </div>
                       </div>
                     </div>
 
-                    <div className="h-[300px] rounded-2xl border border-[#10b981]/20 bg-[radial-gradient(circle_at_top_left,rgba(0,255,204,0.10),transparent_35%),radial-gradient(circle_at_bottom_right,rgba(16,185,129,0.10),transparent_30%)] p-2 sm:h-[340px] md:h-[380px]">
+                    <div className="h-[320px] rounded-[28px] border border-white/10 bg-[radial-gradient(circle_at_top_left,rgba(16,185,129,0.10),transparent_32%),linear-gradient(180deg,rgba(255,255,255,0.04),rgba(255,255,255,0.01))] p-2 sm:h-[360px] lg:h-[420px]">
                       <ResponsiveContainer width="100%" height="100%">
-                        <ComposedChart data={chartData} margin={{ top: 12, right: 16, bottom: 8, left: 4 }}>
+                        <ComposedChart data={chartData} margin={{ top: 12, right: 18, bottom: 8, left: 4 }}>
                           <defs>
-                            <linearGradient id="gradient" x1="0" x2="0" y1="0" y2="1">
-                              <stop offset="0%" stopColor="rgba(0,255,204,0.26)" />
-                              <stop offset="100%" stopColor="rgba(16,185,129,0.08)" />
+                            <linearGradient id="chartBand" x1="0" x2="0" y1="0" y2="1">
+                              <stop offset="0%" stopColor="rgba(16,185,129,0.22)" />
+                              <stop offset="55%" stopColor="rgba(16,185,129,0.12)" />
+                              <stop offset="100%" stopColor="rgba(255,255,255,0.02)" />
                             </linearGradient>
+                            <filter id="quantileGlow" height="160%" width="160%" x="-30%" y="-30%">
+                              <feGaussianBlur result="blur" stdDeviation="3" />
+                              <feMerge>
+                                <feMergeNode in="blur" />
+                                <feMergeNode in="SourceGraphic" />
+                              </feMerge>
+                            </filter>
                           </defs>
 
-                          <CartesianGrid stroke="rgba(0,255,204,0.08)" strokeDasharray="3 3" vertical={false} />
+                          <CartesianGrid stroke="rgba(255,255,255,0.06)" strokeDasharray="3 3" vertical={false} />
                           <XAxis
                             axisLine={false}
                             dataKey="month"
                             interval="preserveStartEnd"
-                            tick={{ fill: "rgba(0,255,204,0.72)", fontSize: 12, fontFamily: "ui-monospace, SFMono-Regular, monospace" }}
+                            tick={{
+                              fill: "rgba(255,255,255,0.46)",
+                              fontSize: 12,
+                              fontFamily: "ui-monospace, SFMono-Regular, monospace",
+                            }}
                             tickFormatter={(value: number) => `M${value}`}
                             tickLine={false}
                           />
@@ -685,14 +747,18 @@ export default function SimulatorClient() {
                               (dataMin: number) => Math.min(dataMin, 0),
                               (dataMax: number) => Math.max(dataMax, 0),
                             ]}
-                            tick={{ fill: "rgba(0,255,204,0.72)", fontSize: 12, fontFamily: "ui-monospace, SFMono-Regular, monospace" }}
+                            tick={{
+                              fill: "rgba(255,255,255,0.46)",
+                              fontSize: 12,
+                              fontFamily: "ui-monospace, SFMono-Regular, monospace",
+                            }}
                             tickFormatter={(value: number) => formatAxisCurrency(value)}
                             tickLine={false}
                             width={72}
                           />
-                          <ReferenceLine stroke="rgba(16,185,129,0.55)" strokeDasharray="4 4" y={0} />
+                          <ReferenceLine stroke="rgba(255,255,255,0.14)" strokeDasharray="4 4" y={0} />
                           <Tooltip
-                            cursor={{ stroke: "gray", strokeWidth: 1, strokeDasharray: "3 3" }}
+                            cursor={{ stroke: "rgba(255,255,255,0.24)", strokeWidth: 1, strokeDasharray: "3 3" }}
                             content={<CustomTooltip />}
                           />
 
@@ -703,26 +769,29 @@ export default function SimulatorClient() {
                               dot={false}
                               activeDot={false}
                               isAnimationActive={false}
-                              stroke="rgba(0,255,204,0.10)"
+                              stroke="rgba(255,255,255,0.09)"
                               strokeWidth={1}
                               strokeLinecap="round"
                               type="monotone"
                             />
                           ))}
 
-                          <Area dataKey="band" fill="url(#gradient)" stroke="none" opacity={0.2} type="monotone" />
+                          <Area dataKey="band" fill="url(#chartBand)" stroke="none" opacity={0.26} type="monotone" />
 
                           <Line
                             dataKey="p90"
                             dot={false}
+                            filter="url(#quantileGlow)"
                             isAnimationActive={false}
-                            stroke="rgba(0,255,204,0.82)"
-                            strokeWidth={2.5}
+                            stroke="rgba(236,253,245,0.82)"
+                            strokeDasharray="6 5"
+                            strokeWidth={2}
                             type="monotone"
                           />
                           <Line
                             dataKey="p50"
                             dot={false}
+                            filter="url(#quantileGlow)"
                             isAnimationActive={false}
                             stroke="#10b981"
                             strokeWidth={3}
@@ -731,9 +800,11 @@ export default function SimulatorClient() {
                           <Line
                             dataKey="p10"
                             dot={false}
+                            filter="url(#quantileGlow)"
                             isAnimationActive={false}
-                            stroke="rgba(16,185,129,0.82)"
-                            strokeWidth={2.5}
+                            stroke="rgba(167,243,208,0.74)"
+                            strokeDasharray="6 5"
+                            strokeWidth={2}
                             type="monotone"
                           />
                         </ComposedChart>
@@ -743,8 +814,8 @@ export default function SimulatorClient() {
                 </div>
               ) : (
                 <div className="px-5 py-10">
-                  <div className="rounded-2xl border border-dashed border-[#10b981]/20 bg-[rgba(0,255,204,0.04)] px-5 py-10 text-center text-sm text-[#10b981]">
-                    Run a scenario to render the Monte Carlo confidence band and raw spaghetti trajectories.
+                  <div className="rounded-[28px] border border-dashed border-white/10 bg-white/4 px-5 py-12 text-center text-sm text-white/42">
+                    Run a scenario to render the mesh-backed Monte Carlo chart with delayed-income logic.
                   </div>
                 </div>
               )}
