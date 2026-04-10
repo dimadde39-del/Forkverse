@@ -17,31 +17,12 @@ import httpx
 
 SCHEMA_VERSION: Final[str] = "2026-04"
 MAX_PAYLOAD_BYTES: Final[int] = 1_000_000
-MODEL_NAME: Final[str] = "gemini-2.5-flash"
+MODEL_NAME: Final[str] = "llama-3.1-8b-instant"
 REQUEST_TIMEOUT_SECONDS: Final[float] = 20.0
 PROJECT_ROOT: Final[Path] = Path(__file__).parent.parent.resolve()
 PROMPT_PATH: Final[Path] = PROJECT_ROOT / "prompts" / "parser_v1.txt"
 ENV_PATH: Final[Path] = PROJECT_ROOT / ".env"
-GOOGLE_API_URL: Final[str] = f"https://generativelanguage.googleapis.com/v1beta/models/{MODEL_NAME}:generateContent"
-PARSER_RESPONSE_SCHEMA: Final[dict[str, Any]] = {
-    "type": "OBJECT",
-    "properties": {
-        "status": {"type": "STRING"},
-        "params": {
-            "type": "OBJECT",
-            "properties": {
-                "initial_capital": {"type": "INTEGER"},
-                "monthly_burn": {"type": "INTEGER"},
-                "monthly_income": {"type": "INTEGER"},
-                "months": {"type": "INTEGER"},
-                "n_simulations": {"type": "INTEGER"},
-            },
-            "required": ["initial_capital", "monthly_burn", "monthly_income", "months", "n_simulations"],
-        },
-        "question": {"type": "STRING"},
-    },
-    "required": ["status"],
-}
+GROQ_API_URL: Final[str] = "https://api.groq.com/openai/v1/chat/completions"
 
 LOGGER = logging.getLogger(__name__)
 
@@ -272,9 +253,9 @@ def _normalize_llm_payload(payload: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def _extract_candidate_text(response_body: dict[str, Any]) -> str:
-    candidates = response_body.get("candidates")
-    if not isinstance(candidates, list) or not candidates:
+def _extract_response_text(response_body: dict[str, Any]) -> str:
+    choices = response_body.get("choices")
+    if not isinstance(choices, list) or not choices:
         raise ApiProblem(
             "INTERNAL_ERROR",
             "LLM response was empty",
@@ -282,8 +263,8 @@ def _extract_candidate_text(response_body: dict[str, Any]) -> str:
             False,
         )
 
-    first_candidate = candidates[0]
-    if not isinstance(first_candidate, Mapping):
+    first_choice = choices[0]
+    if not isinstance(first_choice, Mapping):
         raise ApiProblem(
             "INTERNAL_ERROR",
             "LLM response was empty",
@@ -291,8 +272,8 @@ def _extract_candidate_text(response_body: dict[str, Any]) -> str:
             False,
         )
 
-    content = first_candidate.get("content")
-    if not isinstance(content, Mapping):
+    message = first_choice.get("message")
+    if not isinstance(message, Mapping):
         raise ApiProblem(
             "INTERNAL_ERROR",
             "LLM response was empty",
@@ -300,8 +281,8 @@ def _extract_candidate_text(response_body: dict[str, Any]) -> str:
             False,
         )
 
-    parts = content.get("parts")
-    if not isinstance(parts, list) or not parts:
+    content = message.get("content")
+    if not isinstance(content, str) or not content.strip():
         raise ApiProblem(
             "INTERNAL_ERROR",
             "LLM response was empty",
@@ -309,24 +290,10 @@ def _extract_candidate_text(response_body: dict[str, Any]) -> str:
             False,
         )
 
-    text_fragments = [
-        part.get("text", "")
-        for part in parts
-        if isinstance(part, Mapping) and isinstance(part.get("text"), str)
-    ]
-    candidate_text = "".join(text_fragments).strip()
-    if not candidate_text:
-        raise ApiProblem(
-            "INTERNAL_ERROR",
-            "LLM response was empty",
-            None,
-            False,
-        )
-
-    return candidate_text
+    return content.strip()
 
 
-def _call_gemini(user_text: str) -> dict[str, Any]:
+def _call_groq(user_text: str) -> dict[str, Any]:
     try:
         system_prompt = _load_system_prompt()
     except ApiProblem:
@@ -342,37 +309,28 @@ def _call_gemini(user_text: str) -> dict[str, Any]:
     api_key = _require_api_key()
 
     payload = {
-        "systemInstruction": {
-            "parts": [
-                {
-                    "text": system_prompt,
-                }
-            ]
-        },
-        "contents": [
+        "model": MODEL_NAME,
+        "messages": [
+            {
+                "role": "system",
+                "content": system_prompt,
+            },
             {
                 "role": "user",
-                "parts": [
-                    {
-                        "text": user_text,
-                    }
-                ],
+                "content": user_text,
             }
         ],
-        "generationConfig": {
-            "responseMimeType": "application/json",
-            "responseSchema": PARSER_RESPONSE_SCHEMA,
-        },
+        "response_format": {"type": "json_object"},
     }
 
     headers = {
+        "Authorization": f"Bearer {api_key}",
         "Content-Type": "application/json",
-        "x-goog-api-key": api_key,
     }
 
     try:
         with httpx.Client(timeout=REQUEST_TIMEOUT_SECONDS) as client:
-            response = client.post(GOOGLE_API_URL, headers=headers, json=payload)
+            response = client.post(GROQ_API_URL, headers=headers, json=payload)
 
             if response.status_code >= 400:
                 error_details = response.text
@@ -398,7 +356,7 @@ def _call_gemini(user_text: str) -> dict[str, Any]:
             False,
         ) from exc
 
-    candidate_text = _extract_candidate_text(response_body)
+    candidate_text = _extract_response_text(response_body)
     try:
         llm_payload = json.loads(candidate_text)
     except json.JSONDecodeError as exc:
@@ -434,7 +392,7 @@ class handler(BaseHTTPRequestHandler):
         try:
             body = self._read_json_body()
             user_text = self._extract_text(body)
-            data = _call_gemini(user_text)
+            data = _call_groq(user_text)
             error = None
         except ApiProblem as exc:
             data = None

@@ -13,3 +13,7 @@
 - Добавлен маппинг сырых данных `/api/simulate` в пропсы `SpaghettiChart` с генерацией `forkSummary` и `startDate`.
 - `app/page.tsx` оставлен серверным компонентом.
 - Исправлена типизация `darkMode` в `tailwind.config.ts`: для Tailwind v4+ используется строковое значение `\"class\"`, совместимое с TypeScript strict mode и production build.
+
+# 2026-04-10
+
+- `api/parse.py` полностью мигрирован с Gemini на Groq `llama-3.1-8b-instant`: вызов переведен на OpenAI-совместимый `/chat/completions`, удалены `PARSER_RESPONSE_SCHEMA`, `systemInstruction`, `generationConfig` и вся Google/Gemini-специфика.
