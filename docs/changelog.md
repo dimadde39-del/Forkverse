@@ -17,3 +17,4 @@
 # 2026-04-10
 
 - `api/parse.py` полностью мигрирован с Gemini на Groq `llama-3.1-8b-instant`: вызов переведен на OpenAI-совместимый `/chat/completions`, удалены `PARSER_RESPONSE_SCHEMA`, `systemInstruction`, `generationConfig` и вся Google/Gemini-специфика.
+- В `api/parse.py` добавлен `_run_simulation`, который использует существующие `simulate()` и `compute_metrics()` из `engine/monte_carlo.py`; после `status == "ready"` backend сразу возвращает `trajectories`, `percentiles`, `survival_probability` и `chartData` для графика.

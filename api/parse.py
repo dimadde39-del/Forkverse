@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import Any, Final
 
 import httpx
+from engine.monte_carlo import simulate, compute_metrics
 
 
 SCHEMA_VERSION: Final[str] = "2026-04"
@@ -253,6 +254,74 @@ def _normalize_llm_payload(payload: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _run_simulation(params: dict[str, Any], n_simulations: int = 4000) -> dict[str, Any]:
+    simulation_params = dict(params)
+    simulation_count = int(simulation_params.pop("n_simulations", n_simulations))
+
+    try:
+        paths = simulate(**simulation_params, n_simulations=simulation_count)
+        metrics = compute_metrics(paths)
+    except TypeError as exc:
+        raise ApiProblem(
+            "INVALID_PARAMS",
+            "Invalid simulation parameters",
+            {"reason": "signature_mismatch"},
+            False,
+        ) from exc
+    except ValueError as exc:
+        raise ApiProblem(
+            "INVALID_PARAMS",
+            "Invalid simulation parameters",
+            {"reason": str(exc)},
+            False,
+        ) from exc
+
+    if not isinstance(metrics, dict):
+        raise RuntimeError("compute_metrics() must return a JSON-serializable object")
+
+    months = metrics.get("months")
+    p10 = metrics.get("p10")
+    p50 = metrics.get("p50")
+    p90 = metrics.get("p90")
+    trajectories = metrics.get("spaghetti_sample")
+    survival_probability = metrics.get("survival_probability")
+
+    if not isinstance(months, list) or not isinstance(p10, list) or not isinstance(p50, list) or not isinstance(p90, list):
+        raise RuntimeError("compute_metrics() returned invalid percentile data")
+
+    if not isinstance(trajectories, list):
+        raise RuntimeError("compute_metrics() returned invalid trajectory data")
+
+    horizon = min(len(months), len(p10), len(p50), len(p90))
+    chart_data = [
+        {
+            "month": int(months[index]) + 1,
+            "p10": p10[index],
+            "p50": p50[index],
+            "p90": p90[index],
+        }
+        for index in range(horizon)
+    ]
+
+    result = {
+        "trajectories": trajectories[:50],
+        "percentiles": {
+            "p10": p10[:horizon],
+            "p50": p50[:horizon],
+            "p90": p90[:horizon],
+        },
+        "survival_probability": survival_probability,
+        "chartData": chart_data,
+    }
+
+    try:
+        json.dumps(result)
+    except (TypeError, ValueError) as exc:
+        raise RuntimeError("Simulation result must be JSON-serializable") from exc
+
+    return result
+
+
 def _extract_response_text(response_body: dict[str, Any]) -> str:
     choices = response_body.get("choices")
     if not isinstance(choices, list) or not choices:
@@ -393,6 +462,18 @@ class handler(BaseHTTPRequestHandler):
             body = self._read_json_body()
             user_text = self._extract_text(body)
             data = _call_groq(user_text)
+            if data.get("status") == "ready":
+                params = data.get("params")
+                if not isinstance(params, dict):
+                    raise ApiProblem(
+                        "INTERNAL_ERROR",
+                        "LLM returned invalid JSON payload",
+                        {"field": "params"},
+                        False,
+                    )
+
+                simulation = _run_simulation(params)
+                data = {**data, **simulation}
             error = None
         except ApiProblem as exc:
             data = None
