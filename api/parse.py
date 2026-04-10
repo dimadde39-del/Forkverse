@@ -267,12 +267,23 @@ def _run_simulation(
     months_value = _coerce_int("months", months, minimum=1)
     n_simulations_value = _coerce_int("n_simulations", n_simulations, minimum=1, maximum=4000)
 
-    net_monthly_cashflow = float(monthly_income_value - monthly_burn_value)
-    monthly_noise = np.random.normal(0.0, 0.1, size=(n_simulations_value, months_value))
-    monthly_changes = net_monthly_cashflow * (1.0 + monthly_noise)
-    cumulative_changes = np.cumsum(monthly_changes, axis=1, dtype=np.float64)
+    if initial_capital_value == 0:
+        return np.zeros((n_simulations_value, months_value + 1), dtype=np.float64).tolist()
+
+    rng = np.random.default_rng()
+    income_noise = rng.normal(1.0, 0.15, size=(n_simulations_value, months_value))
+    burn_noise = rng.normal(1.0, 0.15, size=(n_simulations_value, months_value))
+
+    realized_income = np.maximum(0.0, float(monthly_income_value) * income_noise)
+    realized_burn = np.maximum(0.0, float(monthly_burn_value) * burn_noise)
+    monthly_changes = realized_income - realized_burn
+
+    capital_paths = float(initial_capital_value) + np.cumsum(monthly_changes, axis=1, dtype=np.float64)
+    bankrupt_mask = np.maximum.accumulate(capital_paths <= 0.0, axis=1)
+    capital_paths = np.where(bankrupt_mask, 0.0, capital_paths)
+
     initial_column = np.full((n_simulations_value, 1), float(initial_capital_value), dtype=np.float64)
-    trajectories = np.concatenate((initial_column, initial_column + cumulative_changes), axis=1)
+    trajectories = np.concatenate((initial_column, capital_paths), axis=1)
 
     return np.round(trajectories, 2).tolist()
 
@@ -283,7 +294,7 @@ def _build_simulation_response(trajectories: list[list[float]]) -> dict[str, Any
         raise RuntimeError("Simulation output must be a non-empty 2D array with horizon data")
 
     percentiles = np.percentile(array, q=np.array([10.0, 50.0, 90.0]), axis=0, method="linear")
-    survival_probability = float(np.mean(np.all(array >= 0.0, axis=1), dtype=np.float64))
+    survival_probability = float(np.mean(np.all(array[:, 1:] > 0.0, axis=1), dtype=np.float64))
     sample_size = min(int(array.shape[0]), 50)
     sample_indices = np.linspace(0, array.shape[0] - 1, num=sample_size, dtype=np.int64)
 
