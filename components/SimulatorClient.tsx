@@ -415,10 +415,11 @@ export default function SimulatorClient() {
         ),
       ]);
       setStatus("simulated");
-    } catch (error) {
-      const message = error instanceof Error ? error.message : "Unknown error";
-      setErrorMessage(message);
-      setChatHistory((current) => [...current, createMessage("ai", `ERROR | ${message}`)]);
+    } catch (err) {
+      console.error("[SimClient] LLM parse error:", err);
+      const errorMsg = err instanceof Error ? err.message : JSON.stringify(err, null, 2) ?? String(err);
+      setErrorMessage(errorMsg);
+      setChatHistory((current) => [...current, createMessage("ai", `ERROR | ${errorMsg}`)]);
       setStatus(fallbackStatus);
     }
   }
