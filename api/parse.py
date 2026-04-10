@@ -13,7 +13,7 @@ from pathlib import Path
 from typing import Any, Final
 
 import httpx
-from engine.monte_carlo import simulate, compute_metrics
+import numpy as np
 
 
 SCHEMA_VERSION: Final[str] = "2026-04"
@@ -254,72 +254,27 @@ def _normalize_llm_payload(payload: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def _run_simulation(params: dict[str, Any], n_simulations: int = 4000) -> dict[str, Any]:
-    simulation_params = dict(params)
-    simulation_count = int(simulation_params.pop("n_simulations", n_simulations))
+def _run_simulation(
+    initial_capital: int,
+    monthly_income: int,
+    monthly_burn: int,
+    months: int = 36,
+    n_simulations: int = 100,
+) -> list[list[float | int]]:
+    initial_capital_value = _coerce_int("initial_capital", initial_capital, minimum=0)
+    monthly_income_value = _coerce_int("monthly_income", monthly_income, minimum=0)
+    monthly_burn_value = _coerce_int("monthly_burn", monthly_burn, minimum=0)
+    months_value = _coerce_int("months", months, minimum=1)
+    n_simulations_value = _coerce_int("n_simulations", n_simulations, minimum=1, maximum=4000)
 
-    try:
-        paths = simulate(**simulation_params, n_simulations=simulation_count)
-        metrics = compute_metrics(paths)
-    except TypeError as exc:
-        raise ApiProblem(
-            "INVALID_PARAMS",
-            "Invalid simulation parameters",
-            {"reason": "signature_mismatch"},
-            False,
-        ) from exc
-    except ValueError as exc:
-        raise ApiProblem(
-            "INVALID_PARAMS",
-            "Invalid simulation parameters",
-            {"reason": str(exc)},
-            False,
-        ) from exc
+    net_monthly_cashflow = float(monthly_income_value - monthly_burn_value)
+    monthly_noise = np.random.normal(0.0, 0.1, size=(n_simulations_value, months_value))
+    monthly_changes = net_monthly_cashflow * (1.0 + monthly_noise)
+    cumulative_changes = np.cumsum(monthly_changes, axis=1, dtype=np.float64)
+    initial_column = np.full((n_simulations_value, 1), float(initial_capital_value), dtype=np.float64)
+    trajectories = np.concatenate((initial_column, initial_column + cumulative_changes), axis=1)
 
-    if not isinstance(metrics, dict):
-        raise RuntimeError("compute_metrics() must return a JSON-serializable object")
-
-    months = metrics.get("months")
-    p10 = metrics.get("p10")
-    p50 = metrics.get("p50")
-    p90 = metrics.get("p90")
-    trajectories = metrics.get("spaghetti_sample")
-    survival_probability = metrics.get("survival_probability")
-
-    if not isinstance(months, list) or not isinstance(p10, list) or not isinstance(p50, list) or not isinstance(p90, list):
-        raise RuntimeError("compute_metrics() returned invalid percentile data")
-
-    if not isinstance(trajectories, list):
-        raise RuntimeError("compute_metrics() returned invalid trajectory data")
-
-    horizon = min(len(months), len(p10), len(p50), len(p90))
-    chart_data = [
-        {
-            "month": int(months[index]) + 1,
-            "p10": p10[index],
-            "p50": p50[index],
-            "p90": p90[index],
-        }
-        for index in range(horizon)
-    ]
-
-    result = {
-        "trajectories": trajectories[:50],
-        "percentiles": {
-            "p10": p10[:horizon],
-            "p50": p50[:horizon],
-            "p90": p90[:horizon],
-        },
-        "survival_probability": survival_probability,
-        "chartData": chart_data,
-    }
-
-    try:
-        json.dumps(result)
-    except (TypeError, ValueError) as exc:
-        raise RuntimeError("Simulation result must be JSON-serializable") from exc
-
-    return result
+    return np.round(trajectories, 2).tolist()
 
 
 def _extract_response_text(response_body: dict[str, Any]) -> str:
@@ -472,8 +427,18 @@ class handler(BaseHTTPRequestHandler):
                         False,
                     )
 
-                simulation = _run_simulation(params)
-                data = {**data, **simulation}
+                trajectories = _run_simulation(
+                    params["initial_capital"],
+                    params["monthly_income"],
+                    params["monthly_burn"],
+                    months=params["months"],
+                    n_simulations=params["n_simulations"],
+                )
+                data = {
+                    "status": "ready",
+                    "params": params,
+                    "trajectories": trajectories,
+                }
             error = None
         except ApiProblem as exc:
             data = None
