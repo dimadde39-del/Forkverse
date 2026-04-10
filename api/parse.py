@@ -260,7 +260,7 @@ def _run_simulation(
     monthly_burn: int,
     months: int = 36,
     n_simulations: int = 100,
-) -> list[list[float | int]]:
+) -> list[list[float]]:
     initial_capital_value = _coerce_int("initial_capital", initial_capital, minimum=0)
     monthly_income_value = _coerce_int("monthly_income", monthly_income, minimum=0)
     monthly_burn_value = _coerce_int("monthly_burn", monthly_burn, minimum=0)
@@ -275,6 +275,27 @@ def _run_simulation(
     trajectories = np.concatenate((initial_column, initial_column + cumulative_changes), axis=1)
 
     return np.round(trajectories, 2).tolist()
+
+
+def _build_simulation_response(trajectories: list[list[float]]) -> dict[str, Any]:
+    array = np.asarray(trajectories, dtype=np.float64)
+    if array.ndim != 2 or array.shape[0] < 1 or array.shape[1] < 2:
+        raise RuntimeError("Simulation output must be a non-empty 2D array with horizon data")
+
+    percentiles = np.percentile(array, q=np.array([10.0, 50.0, 90.0]), axis=0, method="linear")
+    survival_probability = float(np.mean(np.all(array >= 0.0, axis=1), dtype=np.float64))
+    sample_size = min(int(array.shape[0]), 50)
+    sample_indices = np.linspace(0, array.shape[0] - 1, num=sample_size, dtype=np.int64)
+
+    return {
+        "months": np.arange(array.shape[1], dtype=np.int64).tolist(),
+        "n_simulations": int(array.shape[0]),
+        "survival_probability": survival_probability,
+        "p10": np.round(percentiles[0], 2).tolist(),
+        "p50": np.round(percentiles[1], 2).tolist(),
+        "p90": np.round(percentiles[2], 2).tolist(),
+        "spaghetti_sample": np.round(array[sample_indices], 2).tolist(),
+    }
 
 
 def _extract_response_text(response_body: dict[str, Any]) -> str:
@@ -434,10 +455,11 @@ class handler(BaseHTTPRequestHandler):
                     months=params["months"],
                     n_simulations=params["n_simulations"],
                 )
+                simulation_data = _build_simulation_response(trajectories)
                 data = {
                     "status": "ready",
                     "params": params,
-                    "trajectories": trajectories,
+                    **simulation_data,
                 }
             error = None
         except ApiProblem as exc:

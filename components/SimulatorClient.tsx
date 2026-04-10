@@ -396,15 +396,7 @@ export default function SimulatorClient() {
       setStatus("simulating");
 
       const nextStartDate = new Date().toISOString();
-      const simulateEnvelope = await postEnvelope<unknown>("/api/simulate", {
-        params: normalizedParseData.params,
-      });
-
-      if (simulateEnvelope.error) {
-        throw new Error(simulateEnvelope.error.message);
-      }
-
-      const normalizedSimulationData = normalizeSimulationResponseData(simulateEnvelope.data);
+      const normalizedSimulationData = normalizeSimulationResponseData(parseEnvelope.data);
       setSimulationStartDate(nextStartDate);
       setSimulationData(normalizedSimulationData);
       setChatHistory((current) => [

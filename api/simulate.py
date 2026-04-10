@@ -32,7 +32,9 @@ class ApiProblem(Exception):
 
 
 def get_engine():
-    raise NotImplementedError("Monte Carlo engine is not configured.")
+    from engine.monte_carlo import compute_metrics, simulate
+
+    return simulate, compute_metrics
 
 
 def _utc_now_iso() -> str:
