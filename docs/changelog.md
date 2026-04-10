@@ -20,3 +20,4 @@
 - В `api/parse.py` добавлен `_run_simulation`, который использует существующие `simulate()` и `compute_metrics()` из `engine/monte_carlo.py`; после `status == "ready"` backend сразу возвращает `trajectories`, `percentiles`, `survival_probability` и `chartData` для графика.
 - `prompts/parser_v1.txt` переписан в жёсткий zero-shot prompt: модель обязана сама агрегировать расходы, не писать формулы в JSON и не задавать лишних уточняющих вопросов, если данных достаточно для примерной оценки.
 - `api/parse.py` переведён на встроенную NumPy-симуляцию сразу после `status == "ready"`: backend теперь возвращает `status`, `params` и готовые `trajectories` в одном envelope без отдельного шага simulation engine.
+- `prompts/parser_v1.txt` заново зафиксирован в сверхжёстком JSON-режиме: без новых ключей, без формул и без отклонений от `ready/needs_clarification` структуры; `api/parse.py` дополнительно сверен на наличие `response_format: {"type": "json_object"}` для Groq.
