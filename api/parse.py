@@ -17,12 +17,12 @@ import httpx
 
 SCHEMA_VERSION: Final[str] = "2026-04"
 MAX_PAYLOAD_BYTES: Final[int] = 1_000_000
-MODEL_NAME: Final[str] = "gemini-1.5-flash"
+MODEL_NAME: Final[str] = "gemini-2.5-flash"
 REQUEST_TIMEOUT_SECONDS: Final[float] = 20.0
 PROJECT_ROOT: Final[Path] = Path(__file__).parent.parent.resolve()
 PROMPT_PATH: Final[Path] = PROJECT_ROOT / "prompts" / "parser_v1.txt"
 ENV_PATH: Final[Path] = PROJECT_ROOT / ".env"
-GOOGLE_API_URL: Final[str] = f"https://generativelanguage.googleapis.com/v1/models/{MODEL_NAME}:generateContent"
+GOOGLE_API_URL: Final[str] = f"https://generativelanguage.googleapis.com/v1beta/models/{MODEL_NAME}:generateContent"
 PARSER_RESPONSE_SCHEMA: Final[dict[str, Any]] = {
     "type": "OBJECT",
     "properties": {
