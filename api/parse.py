@@ -18,7 +18,7 @@ import numpy as np
 
 SCHEMA_VERSION: Final[str] = "2026-04"
 MAX_PAYLOAD_BYTES: Final[int] = 1_000_000
-MODEL_NAME: Final[str] = "llama-3.1-8b-instant"
+MODEL_NAME: Final[str] = "llama-3.3-70b-versatile"
 REQUEST_TIMEOUT_SECONDS: Final[float] = 20.0
 PROJECT_ROOT: Final[Path] = Path(__file__).parent.parent.resolve()
 PROMPT_PATH: Final[Path] = PROJECT_ROOT / "prompts" / "parser_v1.txt"
