@@ -3,12 +3,15 @@ from __future__ import annotations
 import json
 import logging
 import os
+import sys
 import time
 import uuid
 from collections.abc import Mapping
 from datetime import datetime, timezone
 from functools import lru_cache
 from http.server import BaseHTTPRequestHandler
+from importlib.machinery import PathFinder
+from importlib.util import module_from_spec
 from pathlib import Path
 from typing import Any, Final
 
@@ -24,6 +27,10 @@ PROJECT_ROOT: Final[Path] = Path(__file__).parent.parent.resolve()
 PROMPT_PATH: Final[Path] = PROJECT_ROOT / "prompts" / "parser_v1.txt"
 ENV_PATH: Final[Path] = PROJECT_ROOT / ".env"
 GROQ_API_URL: Final[str] = "https://api.groq.com/openai/v1/chat/completions"
+SUPABASE_URL_ENV: Final[str] = "SUPABASE_URL"
+SUPABASE_SERVICE_ROLE_KEY_ENV: Final[str] = "SUPABASE_SERVICE_ROLE_KEY"
+TELEGRAM_CONTEXT_TABLE: Final[str] = "telegram_context"
+SCENARIO_STATE_TABLE: Final[str] = "scenario_state"
 PARSER_RESPONSE_SCHEMA: Final[dict[str, Any]] = {
     "type": "object",
     "additionalProperties": False,
@@ -160,6 +167,278 @@ def _require_api_key() -> str:
         )
 
     return api_key
+
+
+@lru_cache(maxsize=1)
+def _load_supabase_sdk():
+    site_packages_paths = [path for path in sys.path if "site-packages" in path.lower()]
+    spec = PathFinder.find_spec("supabase", site_packages_paths or None)
+    if spec is None or spec.loader is None:
+        raise ApiProblem(
+            "INTERNAL_ERROR",
+            "supabase-py is not installed",
+            {"package": "supabase"},
+            False,
+        )
+
+    module = module_from_spec(spec)
+    previous_module = sys.modules.get("supabase")
+    sys.modules["supabase"] = module
+
+    try:
+        spec.loader.exec_module(module)
+    except Exception as exc:
+        if previous_module is not None:
+            sys.modules["supabase"] = previous_module
+        else:
+            sys.modules.pop("supabase", None)
+        raise ApiProblem(
+            "INTERNAL_ERROR",
+            "Failed to load supabase-py",
+            {"package": "supabase", "reason": str(exc)},
+            False,
+        ) from exc
+
+    return module
+
+
+@lru_cache(maxsize=1)
+def _get_supabase_client():
+    supabase_url = os.environ.get(SUPABASE_URL_ENV, "").strip()
+    supabase_service_role_key = os.environ.get(SUPABASE_SERVICE_ROLE_KEY_ENV, "").strip()
+
+    if not supabase_url or not supabase_service_role_key:
+        raise ApiProblem(
+            "INTERNAL_ERROR",
+            "Supabase is not configured",
+            {
+                "env": [SUPABASE_URL_ENV, SUPABASE_SERVICE_ROLE_KEY_ENV],
+            },
+            False,
+        )
+
+    supabase_sdk = _load_supabase_sdk()
+
+    try:
+        return supabase_sdk.create_client(supabase_url, supabase_service_role_key)
+    except Exception as exc:
+        raise ApiProblem(
+            "INTERNAL_ERROR",
+            "Failed to initialize Supabase client",
+            {"reason": str(exc)},
+            False,
+        ) from exc
+
+
+def _is_table_missing_error(exc: Exception) -> bool:
+    if "PGRST205" in str(exc):
+        return True
+
+    response = getattr(exc, "message", None)
+    return isinstance(response, Mapping) and response.get("code") == "PGRST205"
+
+
+def _extract_json_object(value: Any) -> dict[str, Any] | None:
+    if isinstance(value, Mapping):
+        return dict(value)
+
+    if isinstance(value, str):
+        stripped = value.strip()
+        if not stripped:
+            return None
+
+        try:
+            decoded = json.loads(stripped)
+        except json.JSONDecodeError:
+            return None
+
+        if isinstance(decoded, Mapping):
+            return dict(decoded)
+
+    return None
+
+
+def _extract_first_text(row: Mapping[str, Any], fields: tuple[str, ...]) -> str | None:
+    for field in fields:
+        value = row.get(field)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+
+    return None
+
+
+def _fetch_optional_supabase_row(table: str, *, telegram_user_id: int) -> dict[str, Any] | None:
+    try:
+        response = _get_supabase_client().table(table).select("*").eq("telegram_user_id", telegram_user_id).limit(1).execute()
+    except ApiProblem:
+        raise
+    except Exception as exc:
+        if _is_table_missing_error(exc):
+            LOGGER.warning("Supabase table %s is missing; skipping Telegram state integration", table)
+            return None
+
+        LOGGER.warning("Supabase lookup failed for %s: %s", table, exc)
+        return None
+
+    rows = response.data or []
+    if not rows:
+        return None
+
+    first_row = rows[0]
+    return dict(first_row) if isinstance(first_row, Mapping) else None
+
+
+def _build_parser_context_payload(
+    telegram_context_row: Mapping[str, Any] | None,
+    scenario_state_row: Mapping[str, Any] | None,
+) -> dict[str, Any] | None:
+    payload: dict[str, Any] = {}
+
+    if telegram_context_row is not None:
+        context_text = _extract_first_text(
+            telegram_context_row,
+            ("context_text", "context_summary", "summary", "context", "notes", "parser_context"),
+        )
+        base_params = _extract_json_object(telegram_context_row.get("base_params"))
+
+        if context_text:
+            payload["telegram_context"] = context_text
+        if base_params:
+            payload["base_params"] = base_params
+
+    if scenario_state_row is not None:
+        previous_params = _extract_json_object(scenario_state_row.get("params"))
+        previous_source_text = _extract_first_text(scenario_state_row, ("source_text", "message_text", "user_text"))
+
+        if previous_params:
+            payload["previous_scenario"] = previous_params
+        if previous_source_text:
+            payload["previous_user_message"] = previous_source_text
+
+    return payload or None
+
+
+def _build_parser_input(user_text: str, parser_context_payload: Mapping[str, Any] | None) -> str:
+    if not parser_context_payload:
+        return user_text
+
+    context_json = json.dumps(parser_context_payload, ensure_ascii=False, separators=(",", ":"))
+    return (
+        "BASE_CONTEXT_JSON:"
+        f"{context_json}\n"
+        "Используй BASE_CONTEXT_JSON как доверенную базу для всех полей, которых нет в новом сообщении. "
+        "Если новое сообщение явно меняет поле, новое сообщение важнее.\n"
+        f"USER_MESSAGE:{user_text}"
+    )
+
+
+def _resolve_profile_id(
+    telegram_user_id: int,
+    telegram_context_row: Mapping[str, Any] | None,
+    scenario_state_row: Mapping[str, Any] | None,
+) -> str | None:
+    for row in (scenario_state_row, telegram_context_row):
+        if row is None:
+            continue
+
+        profile_id = row.get("profile_id")
+        if isinstance(profile_id, str) and profile_id.strip():
+            return profile_id.strip()
+
+    try:
+        response = (
+            _get_supabase_client()
+            .table("profiles")
+            .select("id")
+            .eq("telegram_user_id", telegram_user_id)
+            .limit(1)
+            .execute()
+        )
+    except ApiProblem:
+        raise
+    except Exception as exc:
+        if _is_table_missing_error(exc):
+            LOGGER.warning("Supabase table profiles is missing; scenario_state will be stored without profile_id")
+            return None
+
+        LOGGER.warning("Failed to resolve profile_id for Telegram user %s: %s", telegram_user_id, exc)
+        return None
+
+    rows = response.data or []
+    if not rows or not isinstance(rows[0], Mapping):
+        return None
+
+    profile_id = rows[0].get("id")
+    return profile_id.strip() if isinstance(profile_id, str) and profile_id.strip() else None
+
+
+def _load_telegram_parser_context(
+    telegram_user_id: int | None,
+) -> tuple[dict[str, Any] | None, dict[str, Any] | None, dict[str, Any] | None]:
+    if telegram_user_id is None:
+        return None, None, None
+
+    try:
+        telegram_context_row = _fetch_optional_supabase_row(TELEGRAM_CONTEXT_TABLE, telegram_user_id=telegram_user_id)
+        scenario_state_row = _fetch_optional_supabase_row(SCENARIO_STATE_TABLE, telegram_user_id=telegram_user_id)
+    except ApiProblem as exc:
+        LOGGER.warning("Supabase initialization failed; continuing without Telegram context: %s", exc.message)
+        return None, None, None
+
+    parser_context_payload = _build_parser_context_payload(telegram_context_row, scenario_state_row)
+    return parser_context_payload, telegram_context_row, scenario_state_row
+
+
+def _persist_scenario_state(
+    *,
+    telegram_user_id: int | None,
+    request_id: str,
+    source_text: str,
+    params: Mapping[str, Any],
+    simulation_data: Mapping[str, Any],
+    telegram_context_row: Mapping[str, Any] | None,
+    scenario_state_row: Mapping[str, Any] | None,
+) -> None:
+    if telegram_user_id is None:
+        return
+
+    simulation_summary = {
+        "status": "ready",
+        "survival_probability": simulation_data.get("survival_probability"),
+        "n_simulations": simulation_data.get("n_simulations"),
+        "months": simulation_data.get("months"),
+        "p10": simulation_data.get("p10"),
+        "p50": simulation_data.get("p50"),
+        "p90": simulation_data.get("p90"),
+    }
+
+    try:
+        profile_id = _resolve_profile_id(telegram_user_id, telegram_context_row, scenario_state_row)
+    except ApiProblem as exc:
+        LOGGER.warning("Supabase initialization failed during scenario_state save: %s", exc.message)
+        profile_id = None
+
+    payload: dict[str, Any] = {
+        "telegram_user_id": telegram_user_id,
+        "latest_request_id": request_id,
+        "source_text": source_text,
+        "params": dict(params),
+        "simulation_summary": simulation_summary,
+    }
+
+    if profile_id is not None:
+        payload["profile_id"] = profile_id
+
+    try:
+        _get_supabase_client().table(SCENARIO_STATE_TABLE).upsert(payload, on_conflict="telegram_user_id").execute()
+    except ApiProblem as exc:
+        LOGGER.warning("Supabase initialization failed during scenario_state upsert: %s", exc.message)
+    except Exception as exc:
+        if _is_table_missing_error(exc):
+            LOGGER.warning("Supabase table %s is missing; scenario_state was not persisted", SCENARIO_STATE_TABLE)
+            return
+
+        LOGGER.warning("Failed to upsert scenario_state for Telegram user %s: %s", telegram_user_id, exc)
 
 
 def _coerce_int(name: str, value: Any, minimum: int | None = None, maximum: int | None = None) -> int:
@@ -487,7 +766,10 @@ class handler(BaseHTTPRequestHandler):
         try:
             body = self._read_json_body()
             user_text = self._extract_text(body)
-            data = _call_groq(user_text)
+            telegram_user_id = self._extract_optional_telegram_user_id(body)
+            parser_context_payload, telegram_context_row, scenario_state_row = _load_telegram_parser_context(telegram_user_id)
+            parser_input = _build_parser_input(user_text, parser_context_payload)
+            data = _call_groq(parser_input)
             if data.get("status") == "ready":
                 params = data.get("params")
                 if not isinstance(params, dict):
@@ -512,6 +794,15 @@ class handler(BaseHTTPRequestHandler):
                     "params": params,
                     **simulation_data,
                 }
+                _persist_scenario_state(
+                    telegram_user_id=telegram_user_id,
+                    request_id=request_id,
+                    source_text=user_text,
+                    params=params,
+                    simulation_data=simulation_data,
+                    telegram_context_row=telegram_context_row,
+                    scenario_state_row=scenario_state_row,
+                )
             error = None
         except ApiProblem as exc:
             data = None
@@ -635,6 +926,20 @@ class handler(BaseHTTPRequestHandler):
             )
 
         return text.strip()
+
+    def _extract_optional_telegram_user_id(self, body: dict[str, Any]) -> int | None:
+        if "telegram_user_id" not in body or body["telegram_user_id"] is None:
+            return None
+
+        try:
+            return _coerce_int("telegram_user_id", body.get("telegram_user_id"), minimum=1)
+        except ApiProblem as exc:
+            raise ApiProblem(
+                "INVALID_PARAMS",
+                "telegram_user_id must be a positive integer",
+                exc.details,
+                False,
+            ) from exc
 
     def _send_method_not_allowed(self) -> None:
         request_id = f"req_{uuid.uuid4().hex[:12]}"
