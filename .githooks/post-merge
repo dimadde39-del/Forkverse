@@ -1,0 +1,3 @@
+#!/bin/sh
+REPO_ROOT="$(git rev-parse --show-toplevel)"
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$REPO_ROOT/scripts/obsidian-autolog.ps1" -Event "post-merge"

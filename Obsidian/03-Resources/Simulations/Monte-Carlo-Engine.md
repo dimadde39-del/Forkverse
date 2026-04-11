@@ -1,6 +1,6 @@
 # Monte-Carlo-Engine
 
-Backlinks: [[ForkVerse MOC]] · [[01-Projects/ForkVerse/Current-Status]] · [[02-Architecture/Parser-and-Simulation-Flow]]
+Backlinks: [[ForkVerse MOC]] · [[01-Projects/ForkVerse/Current-Status]] · [[03-Resources/Architecture/Parser-and-Simulation-Flow]] · [[03-Resources/MOC]]
 
 ## Purpose
 Эта заметка фиксирует, как ForkVerse считает runway после парсинга сценария.
@@ -27,4 +27,5 @@ flowchart LR
 ## Connected Context
 - Project overview: [[ForkVerse MOC]]
 - Current state: [[01-Projects/ForkVerse/Current-Status]]
-- API contract path: [[02-Architecture/Parser-and-Simulation-Flow]]
+- API contract path: [[03-Resources/Architecture/Parser-and-Simulation-Flow]]
+- Design context: [[03-Resources/Design/emil-design-eng]]

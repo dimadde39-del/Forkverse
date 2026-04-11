@@ -1,6 +1,6 @@
 # emil-design-eng
 
-Backlinks: [[ForkVerse MOC]] · [[01-Projects/ForkVerse/Current-Status]]
+Backlinks: [[ForkVerse MOC]] · [[01-Projects/ForkVerse/Current-Status]] · [[03-Resources/MOC]]
 
 ## Source
 - Skill file: `C:\ForkVerse\.agents\skills\emil-design-eng\SKILL.md`
@@ -13,5 +13,6 @@ Backlinks: [[ForkVerse MOC]] · [[01-Projects/ForkVerse/Current-Status]]
 
 ## Linked Notes
 - Main map: [[ForkVerse MOC]]
-- Current implementation state: [[01-Projects/ForkVerse/Current-Status]]
-- Simulation output that the UI visualizes: [[03-Simulations/Monte-Carlo-Engine]]
+- Project status: [[01-Projects/ForkVerse/Current-Status]]
+- Simulation output: [[03-Resources/Simulations/Monte-Carlo-Engine]]
+- Knowledge operations: [[02-Areas/Knowledge-Operations]]
