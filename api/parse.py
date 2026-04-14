@@ -33,6 +33,20 @@ SUPABASE_URL_ENV: Final[str] = "SUPABASE_URL"
 SUPABASE_SERVICE_ROLE_KEY_ENV: Final[str] = "SUPABASE_SERVICE_ROLE_KEY"
 TELEGRAM_CONTEXT_TABLE: Final[str] = "telegram_context"
 SCENARIO_STATE_TABLE: Final[str] = "scenario_state"
+PARSER_INPUT_PREFIX: Final[str] = "BASE_CONTEXT_JSON:"
+LAST_BOT_QUESTION_PREFIX: Final[str] = "LAST_BOT_QUESTION:"
+PARSER_INPUT_USER_MESSAGE_PREFIX: Final[str] = "USER_MESSAGE:"
+LAST_BOT_QUESTION_KEY: Final[str] = "last_bot_question"
+LAST_BOT_QUESTION_METADATA_KEY: Final[str] = LAST_BOT_QUESTION_KEY
+PARSER_CONTEXT_LAST_BOT_QUESTION_FIELDS: Final[tuple[str, ...]] = (
+    LAST_BOT_QUESTION_KEY,
+    "latest_bot_question",
+    "bot_question",
+    "question_text",
+    "question",
+    "last_question",
+    "clarification_question",
+)
 PARSER_RESPONSE_SCHEMA: Final[dict[str, Any]] = {
     "type": "object",
     "additionalProperties": False,
@@ -120,6 +134,23 @@ IGNORABLE_INT_SUFFIXES: Final[set[str]] = {
     "months",
     "mo",
     "mos",
+    "about",
+    "approx",
+    "approximately",
+    "around",
+    "circa",
+    "maybe",
+    "okolo",
+    "около",
+    "месяц",
+    "месяца",
+    "месяцев",
+    "месяцы",
+    "ориентировочно",
+    "приблизительно",
+    "примерно",
+    "наверное",
+    "roughly",
     "месяц",
     "месяца",
     "месяцев",
@@ -423,6 +454,36 @@ def _extract_json_object(value: Any) -> dict[str, Any] | None:
     return None
 
 
+def _extract_parser_context_payload_from_input(parser_input: str) -> dict[str, Any] | None:
+    cleaned = parser_input.strip().lstrip("\ufeff")
+    if not cleaned:
+        return None
+
+    prefix_index = cleaned.find(PARSER_INPUT_PREFIX)
+    if prefix_index == -1:
+        return None
+
+    user_message_index = cleaned.find(PARSER_INPUT_USER_MESSAGE_PREFIX, prefix_index + len(PARSER_INPUT_PREFIX))
+    search_end = user_message_index if user_message_index != -1 else len(cleaned)
+    start_index = cleaned.find("{", prefix_index + len(PARSER_INPUT_PREFIX), search_end)
+    if start_index == -1:
+        return None
+
+    end_index = _scan_json_object_end(cleaned, start_index)
+    if end_index is None:
+        return None
+
+    try:
+        decoded = json.loads(cleaned[start_index:end_index])
+    except json.JSONDecodeError:
+        return None
+
+    if not isinstance(decoded, Mapping):
+        return None
+
+    return dict(decoded)
+
+
 def _merge_json_objects(
     base: Mapping[str, Any] | None,
     updates: Mapping[str, Any] | None,
@@ -485,12 +546,26 @@ def _resolve_int_multiplier(suffix: str) -> int | None:
 
 
 def _coerce_int_from_string(name: str, value: str) -> int:
-    match = INT_STRING_RE.fullmatch(
+    normalized_value = (
         value.strip()
+        .lstrip("\ufeff")
         .replace("−", "-")
         .replace("–", "-")
-        .replace("—", "-"),
+        .replace("—", "-")
     )
+
+    match = INT_STRING_RE.fullmatch(normalized_value)
+    if match is None:
+        first_digit_match = re.search(r"[+-]?\d", normalized_value)
+        if first_digit_match is None:
+            raise ApiProblem(
+                "INTERNAL_ERROR",
+                "LLM returned invalid JSON payload",
+                {"field": name, "reason": "non_numeric_string"},
+                False,
+            )
+
+        match = INT_STRING_RE.fullmatch(normalized_value[first_digit_match.start():])
     if match is None:
         raise ApiProblem(
             "INTERNAL_ERROR",
@@ -531,9 +606,14 @@ def _coerce_int_from_string(name: str, value: str) -> int:
     return int(scaled_value)
 
 
-def _extract_base_params_snapshot(parser_context_payload: Mapping[str, Any] | None) -> dict[str, Any] | None:
+def _extract_base_params_snapshot(parser_context_payload: Mapping[str, Any] | str | None) -> dict[str, Any] | None:
     if not parser_context_payload:
         return None
+
+    if isinstance(parser_context_payload, str):
+        parser_context_payload = _extract_parser_context_payload_from_input(parser_context_payload)
+        if parser_context_payload is None:
+            return None
 
     base_params = _extract_json_object(parser_context_payload.get("base_params"))
     if base_params:
@@ -547,6 +627,41 @@ def _extract_first_text(row: Mapping[str, Any], fields: tuple[str, ...]) -> str 
         value = row.get(field)
         if isinstance(value, str) and value.strip():
             return value.strip()
+
+    return None
+
+
+def _extract_last_bot_question(row: Mapping[str, Any] | None) -> str | None:
+    if row is None:
+        return None
+
+    direct_question = row.get(LAST_BOT_QUESTION_KEY)
+    if isinstance(direct_question, str) and direct_question.strip():
+        return direct_question.strip()
+
+    metadata = _extract_json_object(row.get("metadata"))
+    if metadata is not None:
+        for key in PARSER_CONTEXT_LAST_BOT_QUESTION_FIELDS:
+            metadata_question = metadata.get(key)
+            if isinstance(metadata_question, str) and metadata_question.strip():
+                return metadata_question.strip()
+
+        for nested_key in ("parser", "context"):
+            nested_metadata = metadata.get(nested_key)
+            if not isinstance(nested_metadata, Mapping):
+                continue
+
+            for key in PARSER_CONTEXT_LAST_BOT_QUESTION_FIELDS:
+                nested_question = nested_metadata.get(key)
+                if isinstance(nested_question, str) and nested_question.strip():
+                    return nested_question.strip()
+
+    simulation_summary = _extract_json_object(row.get("simulation_summary"))
+    if simulation_summary is not None:
+        for key in PARSER_CONTEXT_LAST_BOT_QUESTION_FIELDS:
+            summary_question = simulation_summary.get(key)
+            if isinstance(summary_question, str) and summary_question.strip():
+                return summary_question.strip()
 
     return None
 
@@ -584,15 +699,22 @@ def _build_parser_context_payload(
             ("context_text", "context_summary", "summary", "context", "notes", "parser_context"),
         )
         base_params = _extract_json_object(telegram_context_row.get("base_params"))
+        last_bot_question = _extract_last_bot_question(telegram_context_row)
 
         if context_text:
             payload["telegram_context"] = context_text
         if base_params:
             payload["base_params"] = base_params
+        if last_bot_question:
+            payload["last_bot_question"] = last_bot_question
 
     if scenario_state_row is not None:
         previous_params = _extract_json_object(scenario_state_row.get("params"))
         previous_source_text = _extract_first_text(scenario_state_row, ("source_text", "message_text", "user_text"))
+        if "last_bot_question" not in payload:
+            last_bot_question = _extract_last_bot_question(scenario_state_row)
+            if last_bot_question:
+                payload["last_bot_question"] = last_bot_question
 
         if previous_params:
             merged_params = _merge_json_objects(_extract_json_object(payload.get("base_params")), previous_params)
@@ -609,12 +731,15 @@ def _build_parser_input(user_text: str, parser_context_payload: Mapping[str, Any
         return user_text
 
     context_json = json.dumps(parser_context_payload, ensure_ascii=False, separators=(",", ":"))
+    last_bot_question = _extract_last_bot_question(parser_context_payload)
+    last_bot_question_block = f"{LAST_BOT_QUESTION_PREFIX}{last_bot_question}\n" if last_bot_question else ""
     return (
-        "BASE_CONTEXT_JSON:"
-        f"{context_json}\n"
+        f"{PARSER_INPUT_PREFIX}{context_json}\n"
+        f"{last_bot_question_block}"
         "Используй BASE_CONTEXT_JSON как доверенную базу для всех полей, которых нет в новом сообщении. "
+        "Если есть LAST_BOT_QUESTION, используй его для сопоставления коротких ответов пользователя. "
         "Если новое сообщение явно меняет поле, новое сообщение важнее.\n"
-        f"USER_MESSAGE:{user_text}"
+        f"{PARSER_INPUT_USER_MESSAGE_PREFIX}{user_text}"
     )
 
 
@@ -688,7 +813,7 @@ def _persist_scenario_state(
     if telegram_user_id is None:
         return
 
-    simulation_summary = {
+    simulation_summary_patch = {
         "status": "ready",
         "survival_probability": simulation_data.get("survival_probability"),
         "n_simulations": simulation_data.get("n_simulations"),
@@ -712,6 +837,9 @@ def _persist_scenario_state(
 
     previous_params = _extract_json_object(existing_state_row.get("params")) if existing_state_row is not None else None
     merged_params = _merge_json_objects(previous_params, params)
+    previous_summary = _extract_json_object(existing_state_row.get("simulation_summary")) if existing_state_row is not None else None
+    simulation_summary = _merge_json_objects(previous_summary, simulation_summary_patch)
+    simulation_summary.pop(LAST_BOT_QUESTION_KEY, None)
 
     try:
         profile_id = _resolve_profile_id(telegram_user_id, telegram_context_row, existing_state_row)
@@ -740,6 +868,110 @@ def _persist_scenario_state(
             return
 
         LOGGER.warning("Failed to upsert scenario_state for Telegram user %s: %s", telegram_user_id, exc)
+
+
+def _persist_last_bot_question(
+    *,
+    telegram_user_id: int | None,
+    request_id: str,
+    source_text: str,
+    question: str | None,
+    telegram_context_row: Mapping[str, Any] | None,
+    scenario_state_row: Mapping[str, Any] | None,
+) -> None:
+    if telegram_user_id is None or not isinstance(question, str):
+        return
+
+    question_text = question.strip()
+    if not question_text:
+        return
+
+    existing_context_row = telegram_context_row
+    if existing_context_row is None:
+        try:
+            existing_context_row = _fetch_optional_supabase_row(TELEGRAM_CONTEXT_TABLE, telegram_user_id=telegram_user_id)
+        except ApiProblem as exc:
+            LOGGER.warning("Supabase initialization failed while loading telegram_context for last_bot_question merge: %s", exc.message)
+            existing_context_row = None
+
+    if existing_context_row is None:
+        LOGGER.warning("telegram_context row is missing; falling back to scenario_state for last_bot_question persistence")
+    else:
+        metadata = _extract_json_object(existing_context_row.get("metadata"))
+        merged_metadata = _merge_json_objects(metadata, {LAST_BOT_QUESTION_METADATA_KEY: question_text})
+
+        payload: dict[str, Any] = {
+            "telegram_user_id": telegram_user_id,
+            "metadata": merged_metadata,
+        }
+
+        try:
+            profile_id = _resolve_profile_id(telegram_user_id, existing_context_row, scenario_state_row)
+        except ApiProblem as exc:
+            LOGGER.warning("Supabase initialization failed during telegram_context metadata save: %s", exc.message)
+            profile_id = None
+
+        if profile_id is not None:
+            payload["profile_id"] = profile_id
+
+        context_text = existing_context_row.get("context_text")
+        if isinstance(context_text, str) and context_text.strip():
+            payload["context_text"] = context_text
+
+        base_params = _extract_json_object(existing_context_row.get("base_params"))
+        if base_params:
+            payload["base_params"] = base_params
+
+        try:
+            _get_supabase_client().table(TELEGRAM_CONTEXT_TABLE).upsert(payload, on_conflict="telegram_user_id").execute()
+            return
+        except ApiProblem as exc:
+            LOGGER.warning("Supabase initialization failed during telegram_context metadata upsert: %s", exc.message)
+        except Exception as exc:
+            if not _is_table_missing_error(exc):
+                LOGGER.warning("Failed to upsert telegram_context metadata for Telegram user %s: %s", telegram_user_id, exc)
+
+    existing_state_row = scenario_state_row
+    try:
+        fresh_state_row = _fetch_optional_supabase_row(SCENARIO_STATE_TABLE, telegram_user_id=telegram_user_id)
+    except ApiProblem as exc:
+        LOGGER.warning("Supabase initialization failed while loading scenario_state for last_bot_question fallback: %s", exc.message)
+        fresh_state_row = None
+
+    if fresh_state_row is not None:
+        existing_state_row = fresh_state_row
+
+    previous_params = _extract_json_object(existing_state_row.get("params")) if existing_state_row is not None else None
+    previous_summary = _extract_json_object(existing_state_row.get("simulation_summary")) if existing_state_row is not None else None
+    simulation_summary = _merge_json_objects(previous_summary, {LAST_BOT_QUESTION_KEY: question_text})
+
+    try:
+        profile_id = _resolve_profile_id(telegram_user_id, telegram_context_row, existing_state_row)
+    except ApiProblem as exc:
+        LOGGER.warning("Supabase initialization failed during scenario_state last_bot_question fallback save: %s", exc.message)
+        profile_id = None
+
+    payload = {
+        "telegram_user_id": telegram_user_id,
+        "latest_request_id": request_id,
+        "source_text": source_text,
+        "params": dict(previous_params or {}),
+        "simulation_summary": simulation_summary,
+    }
+
+    if profile_id is not None:
+        payload["profile_id"] = profile_id
+
+    try:
+        _get_supabase_client().table(SCENARIO_STATE_TABLE).upsert(payload, on_conflict="telegram_user_id").execute()
+    except ApiProblem as exc:
+        LOGGER.warning("Supabase initialization failed during scenario_state last_bot_question upsert: %s", exc.message)
+    except Exception as exc:
+        if _is_table_missing_error(exc):
+            LOGGER.warning("Supabase tables for last_bot_question persistence are missing; skipping save")
+            return
+
+        LOGGER.warning("Failed to persist last_bot_question for Telegram user %s: %s", telegram_user_id, exc)
 
 
 def _coerce_int(name: str, value: Any, minimum: int | None = None, maximum: int | None = None) -> int:
@@ -981,6 +1213,9 @@ def _call_groq(
 
     api_key = _require_api_key()
 
+    if base_params is None:
+        base_params = _extract_base_params_snapshot(user_text)
+
     payload = {
         "model": MODEL_NAME,
         "messages": [
@@ -1093,6 +1328,15 @@ class handler(BaseHTTPRequestHandler):
                     source_text=user_text,
                     params=params,
                     simulation_data=simulation_data,
+                    telegram_context_row=telegram_context_row,
+                    scenario_state_row=scenario_state_row,
+                )
+            elif data.get("status") == "needs_clarification":
+                _persist_last_bot_question(
+                    telegram_user_id=telegram_user_id,
+                    request_id=request_id,
+                    source_text=user_text,
+                    question=data.get("question"),
                     telegram_context_row=telegram_context_row,
                     scenario_state_row=scenario_state_row,
                 )
