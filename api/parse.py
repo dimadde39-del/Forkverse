@@ -3,10 +3,12 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 import sys
 import time
 import uuid
 from collections.abc import Mapping
+from decimal import Decimal, InvalidOperation
 from datetime import datetime, timezone
 from functools import lru_cache
 from http.server import BaseHTTPRequestHandler
@@ -61,6 +63,84 @@ PARSER_RESPONSE_SCHEMA: Final[dict[str, Any]] = {
         "question": {"type": ["string", "null"]},
     },
     "required": ["status", "params", "question"],
+}
+JSON_OBJECT_WINDOW_RE: Final[re.Pattern[str]] = re.compile(r"\{[\s\S]*?\}", re.DOTALL)
+INT_STRING_RE: Final[re.Pattern[str]] = re.compile(
+    r"^\s*(?P<number>[+-]?\d(?:[\d\s_]*\d)?(?:[.,]\d+)?)\s*(?P<suffix>.*?)\s*$",
+    re.IGNORECASE,
+)
+FINANCIAL_SUFFIX_MULTIPLIERS: Final[dict[str, int]] = {
+    "к": 1_000,
+    "косарь": 1_000,
+    "косаря": 1_000,
+    "косарей": 1_000,
+    "косых": 1_000,
+    "косяк": 1_000,
+    "тыс": 1_000,
+    "тыща": 1_000,
+    "тыщи": 1_000,
+    "тыщ": 1_000,
+    "тысь": 1_000,
+    "тысяч": 1_000,
+    "т": 1_000,
+    "штук": 1_000,
+    "штука": 1_000,
+    "гранд": 1_000,
+    "гранда": 1_000,
+    "грандов": 1_000,
+    "grand": 1_000,
+    "grands": 1_000,
+    "g": 1_000,
+    "k": 1_000,
+    "m": 1_000_000,
+    "mn": 1_000_000,
+    "mln": 1_000_000,
+    "м": 1_000_000,
+    "млн": 1_000_000,
+    "мил": 1_000_000,
+    "мильон": 1_000_000,
+    "мильона": 1_000_000,
+    "мильонов": 1_000_000,
+    "лям": 1_000_000,
+    "ляма": 1_000_000,
+    "лямов": 1_000_000,
+    "лямчик": 1_000_000,
+    "лямчика": 1_000_000,
+    "лямчиков": 1_000_000,
+    "миллион": 1_000_000,
+    "миллиона": 1_000_000,
+    "миллионов": 1_000_000,
+    "million": 1_000_000,
+    "millions": 1_000_000,
+    "thousand": 1_000,
+    "thousands": 1_000,
+}
+IGNORABLE_INT_SUFFIXES: Final[set[str]] = {
+    "month",
+    "months",
+    "mo",
+    "mos",
+    "месяц",
+    "месяца",
+    "месяцев",
+    "мес",
+    "тенге",
+    "тг",
+    "tg",
+    "usd",
+    "usdt",
+    "dollar",
+    "dollars",
+    "доллар",
+    "доллара",
+    "долларов",
+    "eur",
+    "euro",
+    "евро",
+    "rub",
+    "руб",
+    "рубля",
+    "рублей",
 }
 
 LOGGER = logging.getLogger(__name__)
@@ -238,24 +318,228 @@ def _is_table_missing_error(exc: Exception) -> bool:
     return isinstance(response, Mapping) and response.get("code") == "PGRST205"
 
 
+def _strip_llm_response_noise(text: str) -> str:
+    cleaned = text.strip().lstrip("\ufeff")
+    if not cleaned:
+        return cleaned
+
+    cleaned = re.sub(r"^\s*```(?:json|JSON)?\s*", "", cleaned)
+    cleaned = re.sub(r"\s*```\s*$", "", cleaned)
+    return cleaned.strip()
+
+
+def _scan_json_object_end(text: str, start_index: int) -> int | None:
+    if start_index < 0 or start_index >= len(text) or text[start_index] != "{":
+        return None
+
+    depth = 0
+    in_string = False
+    escaped = False
+
+    for index in range(start_index, len(text)):
+        char = text[index]
+
+        if in_string:
+            if escaped:
+                escaped = False
+            elif char == "\\":
+                escaped = True
+            elif char == '"':
+                in_string = False
+            continue
+
+        if char == '"':
+            in_string = True
+        elif char == "{":
+            depth += 1
+        elif char == "}":
+            depth -= 1
+            if depth == 0:
+                return index + 1
+            if depth < 0:
+                return None
+
+    return None
+
+
+def _iter_json_object_spans(text: str) -> list[tuple[int, int]]:
+    candidate_starts = {match.start() for match in JSON_OBJECT_WINDOW_RE.finditer(text)}
+    candidate_starts.update(match.start() for match in re.finditer(r"\{", text))
+
+    spans: list[tuple[int, int]] = []
+    seen_spans: set[tuple[int, int]] = set()
+
+    for start in sorted(candidate_starts):
+        end = _scan_json_object_end(text, start)
+        if end is None:
+            continue
+
+        span = (start, end)
+        if span in seen_spans:
+            continue
+
+        seen_spans.add(span)
+        spans.append(span)
+
+    return spans
+
+
+def _extract_largest_json_object(text: str) -> dict[str, Any] | None:
+    cleaned_text = _strip_llm_response_noise(text)
+    if not cleaned_text:
+        return None
+
+    best_payload: dict[str, Any] | None = None
+    best_span_length = -1
+
+    for start, end in _iter_json_object_spans(cleaned_text):
+        candidate = cleaned_text[start:end].strip()
+        if not candidate:
+            continue
+
+        try:
+            decoded = json.loads(candidate)
+        except json.JSONDecodeError:
+            continue
+
+        if not isinstance(decoded, Mapping):
+            continue
+
+        span_length = end - start
+        if span_length > best_span_length:
+            best_payload = dict(decoded)
+            best_span_length = span_length
+
+    return best_payload
+
+
 def _extract_json_object(value: Any) -> dict[str, Any] | None:
     if isinstance(value, Mapping):
         return dict(value)
 
     if isinstance(value, str):
-        stripped = value.strip()
-        if not stripped:
-            return None
-
-        try:
-            decoded = json.loads(stripped)
-        except json.JSONDecodeError:
-            return None
-
-        if isinstance(decoded, Mapping):
-            return dict(decoded)
+        return _extract_largest_json_object(value)
 
     return None
+
+
+def _merge_json_objects(
+    base: Mapping[str, Any] | None,
+    updates: Mapping[str, Any] | None,
+) -> dict[str, Any]:
+    merged: dict[str, Any] = dict(base or {})
+    if not updates:
+        return merged
+
+    for key, value in updates.items():
+        existing_value = merged.get(key)
+        if value is None and key in merged:
+            continue
+        if isinstance(existing_value, Mapping) and isinstance(value, Mapping):
+            merged[key] = _merge_json_objects(existing_value, value)
+            continue
+
+        merged[key] = value
+
+    return merged
+
+
+def _normalize_int_suffix(suffix: str) -> str:
+    normalized = (
+        suffix.strip()
+        .lower()
+        .replace("\u00a0", " ")
+        .replace("\u202f", " ")
+        .replace("ё", "е")
+    )
+    normalized = re.sub(r"[\(\)\[\]\{\}]", " ", normalized)
+    normalized = re.sub(r"[.,:;]+", "", normalized)
+    normalized = re.sub(r"\s+", " ", normalized).strip()
+    return normalized
+
+
+def _resolve_int_multiplier(suffix: str) -> int | None:
+    normalized = _normalize_int_suffix(suffix)
+    if not normalized:
+        return 1
+
+    if normalized in FINANCIAL_SUFFIX_MULTIPLIERS:
+        return FINANCIAL_SUFFIX_MULTIPLIERS[normalized]
+    if normalized in IGNORABLE_INT_SUFFIXES:
+        return 1
+
+    tokens = [token for token in normalized.split(" ") if token]
+    if not tokens:
+        return 1
+    if all(token in IGNORABLE_INT_SUFFIXES for token in tokens):
+        return 1
+
+    first_token = tokens[0]
+    tail_tokens = tokens[1:]
+    if first_token in FINANCIAL_SUFFIX_MULTIPLIERS and (
+        not tail_tokens or all(token in IGNORABLE_INT_SUFFIXES for token in tail_tokens)
+    ):
+        return FINANCIAL_SUFFIX_MULTIPLIERS[first_token]
+
+    return None
+
+
+def _coerce_int_from_string(name: str, value: str) -> int:
+    match = INT_STRING_RE.fullmatch(
+        value.strip()
+        .replace("−", "-")
+        .replace("–", "-")
+        .replace("—", "-"),
+    )
+    if match is None:
+        raise ApiProblem(
+            "INTERNAL_ERROR",
+            "LLM returned invalid JSON payload",
+            {"field": name, "reason": "non_numeric_string"},
+            False,
+        )
+
+    number_text = re.sub(r"[\s_]", "", match.group("number")).replace(",", ".")
+    try:
+        number_value = Decimal(number_text)
+    except InvalidOperation as exc:
+        raise ApiProblem(
+            "INTERNAL_ERROR",
+            "LLM returned invalid JSON payload",
+            {"field": name, "reason": "non_numeric_string"},
+            False,
+        ) from exc
+
+    multiplier = _resolve_int_multiplier(match.group("suffix"))
+    if multiplier is None:
+        raise ApiProblem(
+            "INTERNAL_ERROR",
+            "LLM returned invalid JSON payload",
+            {"field": name, "reason": "non_numeric_string"},
+            False,
+        )
+
+    scaled_value = number_value * multiplier
+    if scaled_value != scaled_value.to_integral_value():
+        raise ApiProblem(
+            "INTERNAL_ERROR",
+            "LLM returned invalid JSON payload",
+            {"field": name, "reason": "non_integral_string"},
+            False,
+        )
+
+    return int(scaled_value)
+
+
+def _extract_base_params_snapshot(parser_context_payload: Mapping[str, Any] | None) -> dict[str, Any] | None:
+    if not parser_context_payload:
+        return None
+
+    base_params = _extract_json_object(parser_context_payload.get("base_params"))
+    if base_params:
+        return base_params
+
+    return _extract_json_object(parser_context_payload.get("previous_scenario"))
 
 
 def _extract_first_text(row: Mapping[str, Any], fields: tuple[str, ...]) -> str | None:
@@ -311,7 +595,9 @@ def _build_parser_context_payload(
         previous_source_text = _extract_first_text(scenario_state_row, ("source_text", "message_text", "user_text"))
 
         if previous_params:
-            payload["previous_scenario"] = previous_params
+            merged_params = _merge_json_objects(_extract_json_object(payload.get("base_params")), previous_params)
+            payload["base_params"] = merged_params
+            payload["previous_scenario"] = merged_params
         if previous_source_text:
             payload["previous_user_message"] = previous_source_text
 
@@ -412,8 +698,23 @@ def _persist_scenario_state(
         "p90": simulation_data.get("p90"),
     }
 
+    # Always try to merge against the freshest persisted state to avoid
+    # clobbering concurrent updates with a stale snapshot from request start.
+    existing_state_row = scenario_state_row
     try:
-        profile_id = _resolve_profile_id(telegram_user_id, telegram_context_row, scenario_state_row)
+        fresh_state_row = _fetch_optional_supabase_row(SCENARIO_STATE_TABLE, telegram_user_id=telegram_user_id)
+    except ApiProblem as exc:
+        LOGGER.warning("Supabase initialization failed while loading scenario_state for merge: %s", exc.message)
+        fresh_state_row = None
+
+    if fresh_state_row is not None:
+        existing_state_row = fresh_state_row
+
+    previous_params = _extract_json_object(existing_state_row.get("params")) if existing_state_row is not None else None
+    merged_params = _merge_json_objects(previous_params, params)
+
+    try:
+        profile_id = _resolve_profile_id(telegram_user_id, telegram_context_row, existing_state_row)
     except ApiProblem as exc:
         LOGGER.warning("Supabase initialization failed during scenario_state save: %s", exc.message)
         profile_id = None
@@ -422,7 +723,7 @@ def _persist_scenario_state(
         "telegram_user_id": telegram_user_id,
         "latest_request_id": request_id,
         "source_text": source_text,
-        "params": dict(params),
+        "params": merged_params,
         "simulation_summary": simulation_summary,
     }
 
@@ -470,23 +771,7 @@ def _coerce_int(name: str, value: Any, minimum: int | None = None, maximum: int 
                 {"field": name, "reason": "empty_string"},
                 False,
             )
-        try:
-            numeric_value = float(stripped)
-        except ValueError as exc:
-            raise ApiProblem(
-                "INTERNAL_ERROR",
-                "LLM returned invalid JSON payload",
-                {"field": name, "reason": "non_numeric_string"},
-                False,
-            ) from exc
-        if not numeric_value.is_integer():
-            raise ApiProblem(
-                "INTERNAL_ERROR",
-                "LLM returned invalid JSON payload",
-                {"field": name, "reason": "non_integral_string"},
-                False,
-            )
-        coerced = int(numeric_value)
+        coerced = _coerce_int_from_string(name, stripped)
     else:
         raise ApiProblem(
             "INTERNAL_ERROR",
@@ -514,7 +799,11 @@ def _coerce_int(name: str, value: Any, minimum: int | None = None, maximum: int 
     return coerced
 
 
-def _normalize_llm_payload(payload: dict[str, Any]) -> dict[str, Any]:
+def _normalize_llm_payload(
+    payload: dict[str, Any],
+    *,
+    base_params: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
     status = payload.get("status")
     if status not in {"ready", "needs_clarification"}:
         raise ApiProblem(
@@ -549,13 +838,19 @@ def _normalize_llm_payload(payload: dict[str, Any]) -> dict[str, Any]:
             False,
         )
 
+    merged_raw_params = _merge_json_objects(base_params, raw_params)
+
     params = {
-        "initial_capital": _coerce_int("initial_capital", raw_params.get("initial_capital"), minimum=0),
-        "monthly_burn": _coerce_int("monthly_burn", raw_params.get("monthly_burn"), minimum=0),
-        "monthly_income": _coerce_int("monthly_income", raw_params.get("monthly_income"), minimum=0),
-        "income_delay_months": _coerce_int("income_delay_months", raw_params.get("income_delay_months", 0), minimum=0),
-        "months": _coerce_int("months", raw_params.get("months", 6), minimum=1),
-        "n_simulations": _coerce_int("n_simulations", raw_params.get("n_simulations", 100), minimum=1, maximum=4000),
+        "initial_capital": _coerce_int("initial_capital", merged_raw_params.get("initial_capital"), minimum=0),
+        "monthly_burn": _coerce_int("monthly_burn", merged_raw_params.get("monthly_burn"), minimum=0),
+        "monthly_income": _coerce_int("monthly_income", merged_raw_params.get("monthly_income"), minimum=0),
+        "income_delay_months": _coerce_int(
+            "income_delay_months",
+            merged_raw_params.get("income_delay_months", 0),
+            minimum=0,
+        ),
+        "months": _coerce_int("months", merged_raw_params.get("months", 6), minimum=1),
+        "n_simulations": 100,
     }
 
     return {
@@ -667,7 +962,11 @@ def _extract_response_text(response_body: dict[str, Any]) -> str:
     return content.strip()
 
 
-def _call_groq(user_text: str) -> dict[str, Any]:
+def _call_groq(
+    user_text: str,
+    *,
+    base_params: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
     try:
         system_prompt = _load_system_prompt()
     except ApiProblem:
@@ -731,25 +1030,16 @@ def _call_groq(user_text: str) -> dict[str, Any]:
         ) from exc
 
     candidate_text = _extract_response_text(response_body)
-    try:
-        llm_payload = json.loads(candidate_text)
-    except json.JSONDecodeError as exc:
+    llm_payload = _extract_largest_json_object(candidate_text)
+    if llm_payload is None:
         raise ApiProblem(
             "INTERNAL_ERROR",
             "LLM returned invalid JSON",
-            {"reason": "invalid_json"},
-            False,
-        ) from exc
-
-    if not isinstance(llm_payload, dict):
-        raise ApiProblem(
-            "INTERNAL_ERROR",
-            "LLM returned invalid JSON",
-            {"reason": "non_object"},
+            {"reason": "no_recoverable_json_object"},
             False,
         )
 
-    return _normalize_llm_payload(llm_payload)
+    return _normalize_llm_payload(llm_payload, base_params=base_params)
 
 
 _load_local_env_file()
@@ -769,7 +1059,10 @@ class handler(BaseHTTPRequestHandler):
             telegram_user_id = self._extract_optional_telegram_user_id(body)
             parser_context_payload, telegram_context_row, scenario_state_row = _load_telegram_parser_context(telegram_user_id)
             parser_input = _build_parser_input(user_text, parser_context_payload)
-            data = _call_groq(parser_input)
+            data = _call_groq(
+                parser_input,
+                base_params=_extract_base_params_snapshot(parser_context_payload),
+            )
             if data.get("status") == "ready":
                 params = data.get("params")
                 if not isinstance(params, dict):
