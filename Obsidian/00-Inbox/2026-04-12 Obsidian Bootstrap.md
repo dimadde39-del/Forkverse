@@ -1,9 +1,9 @@
 # 2026-04-12 Obsidian Bootstrap
 
-Backlinks: [[ForkVerse MOC]] · [[Daily Notes/2026-04-12]] · [[02-Areas/Knowledge-Operations]]
+Backlinks: [[MonteRun MOC]] · [[Daily Notes/2026-04-12]] · [[02-Areas/Knowledge-Operations]]
 
 ## What Was Bootstrapped
-- Создана базовая PARA-структура vault для ForkVerse.
+- Создана базовая PARA-структура vault для MonteRun.
 - Добавлены MOC, daily notes, templates, resource notes и area notes.
 - Все заметки связаны через [[Wiki Links]], чтобы Graph View работал как карта, а не как список файлов.
 

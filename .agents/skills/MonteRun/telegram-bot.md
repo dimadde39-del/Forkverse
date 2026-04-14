@@ -1,5 +1,5 @@
 name: telegram-bot
-description: Production Telegram-бот ForkVerse. Webhooks-only, ежедневные чекины, MarkdownV2, холодный тон.
+description: Production Telegram-бот MonteRun. Webhooks-only, ежедневные чекины, MarkdownV2, холодный тон.
 
 ## Hard Rules
 - Только webhooks. Polling запрещён навсегда.
@@ -31,3 +31,4 @@ description: Production Telegram-бот ForkVerse. Webhooks-only, ежеднев
 - Idempotency checkins реализован
 - recalculate_survival работает с envelope
 - Тесты покрывают message formatting, webhook flow, error handling и scheduler behavior
+

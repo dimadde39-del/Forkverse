@@ -1,6 +1,6 @@
 # Parser-and-Simulation-Flow
 
-Backlinks: [[ForkVerse MOC]] · [[01-Projects/ForkVerse/Current-Status]] · [[03-Resources/MOC]] · [[03-Resources/Simulations/Monte-Carlo-Engine]]
+Backlinks: [[MonteRun MOC]] · [[01-Projects/MonteRun/Current-Status]] · [[03-Resources/MOC]] · [[03-Resources/Simulations/Monte-Carlo-Engine]]
 
 ## Contract Chain
 1. Parser extracts `initial_capital`, `monthly_burn`, `monthly_income`, `income_delay_months`, `months`, `n_simulations`.
@@ -12,7 +12,7 @@ Backlinks: [[ForkVerse MOC]] · [[01-Projects/ForkVerse/Current-Status]] · [[03
 Когда меняется parser prompt, schema или post-parse simulation behavior, именно эта заметка связывает backend-логику с фронтовым контрактом.
 
 ## Related
-- Project overview: [[ForkVerse MOC]]
-- Project status: [[01-Projects/ForkVerse/Current-Status]]
+- Project overview: [[MonteRun MOC]]
+- Project status: [[01-Projects/MonteRun/Current-Status]]
 - Simulation implementation: [[03-Resources/Simulations/Monte-Carlo-Engine]]
 - Design bar: [[03-Resources/Design/emil-design-eng]]

@@ -1,9 +1,9 @@
 # Product Quality
 
-Backlinks: [[ForkVerse MOC]] · [[02-Areas/MOC]] · [[01-Projects/ForkVerse/Current-Status]]
+Backlinks: [[MonteRun MOC]] · [[02-Areas/MOC]] · [[01-Projects/MonteRun/Current-Status]]
 
 ## Responsibility
-Долгосрочная area для качества продукта ForkVerse: корректность симуляций, ясность контрактов, полезность UI и связность знаний.
+Долгосрочная area для качества продукта MonteRun: корректность симуляций, ясность контрактов, полезность UI и связность знаний.
 
 ## Quality Anchors
 - Math and model behavior: [[03-Resources/Simulations/Monte-Carlo-Engine]]

@@ -1,6 +1,6 @@
 # Current Status
 
-Backlinks: [[ForkVerse MOC]] · [[Daily Notes/2026-04-12]] · [[03-Resources/Architecture/Parser-and-Simulation-Flow]] · [[03-Resources/Simulations/Monte-Carlo-Engine]] · [[03-Resources/Design/emil-design-eng]]
+Backlinks: [[MonteRun MOC]] · [[Daily Notes/2026-04-12]] · [[03-Resources/Architecture/Parser-and-Simulation-Flow]] · [[03-Resources/Simulations/Monte-Carlo-Engine]] · [[03-Resources/Design/emil-design-eng]]
 
 ## Project Snapshot
 - Backend parse contract understands delayed income through `income_delay_months`.
@@ -23,7 +23,7 @@ flowchart LR
 ```
 
 ## Related Notes
-- Project hub: [[ForkVerse MOC]]
+- Project hub: [[MonteRun MOC]]
 - Daily rhythm: [[Daily Notes/2026-04-12]]
 - Architecture chain: [[03-Resources/Architecture/Parser-and-Simulation-Flow]]
 - Simulation model: [[03-Resources/Simulations/Monte-Carlo-Engine]]

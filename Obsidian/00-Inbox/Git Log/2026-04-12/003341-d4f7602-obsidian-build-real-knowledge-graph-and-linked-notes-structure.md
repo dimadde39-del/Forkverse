@@ -1,8 +1,8 @@
-﻿# Git Commit Log
+# Git Commit Log
 
 Daily: [[Daily Notes/2026-04-12]]
-Project: [[ForkVerse MOC]]
-Status: [[01-Projects/ForkVerse/Current-Status]]
+Project: [[MonteRun MOC]]
+Status: [[01-Projects/MonteRun/Current-Status]]
 
 ## Commit
 - SHA: `d4f7602`
@@ -22,6 +22,6 @@ Status: [[01-Projects/ForkVerse/Current-Status]]
 Commit: $shortSha
 Full SHA: $fullSha
 Daily: [[Daily Notes/2026-04-12]]
-Project: [[ForkVerse MOC]]
-Status: [[01-Projects/ForkVerse/Current-Status]]
+Project: [[MonteRun MOC]]
+Status: [[01-Projects/MonteRun/Current-Status]]
 

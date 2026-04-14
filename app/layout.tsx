@@ -12,7 +12,7 @@ const inter = Inter({
 
 export const metadata: Metadata = {
   title: "Fork Zero",
-  description: "ForkVerse Monte Carlo analytics surface",
+  description: "MonteRun Analytics Monte Carlo surface",
 };
 
 export default function RootLayout({
@@ -28,3 +28,4 @@ export default function RootLayout({
     </html>
   );
 }
+

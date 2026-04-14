@@ -1,8 +1,8 @@
 # Second Brain Setup
 
 Daily: [[Daily Notes/2026-04-12]]
-Project: [[ForkVerse MOC]]
-Status: [[01-Projects/ForkVerse/Current-Status]]
+Project: [[MonteRun MOC]]
+Status: [[01-Projects/MonteRun/Current-Status]]
 Area: [[02-Areas/Knowledge-Operations]]
 
 ## Event

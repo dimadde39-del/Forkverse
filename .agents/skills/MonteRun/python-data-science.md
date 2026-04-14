@@ -1,5 +1,5 @@
 name: python-data-science
-description: Высокопроизводительный Monte Carlo движок ForkVerse. Векторизация, default_rng, серверная агрегация. Никогда не шлёшь сырые матрицы клиенту.
+description: Высокопроизводительный Monte Carlo движок MonteRun. Векторизация, default_rng, серверная агрегация. Никогда не шлёшь сырые матрицы клиенту.
 
 ## Rule 0: Vectorize Everything
 Все N симуляций — матричные операции. Циклы по месяцам и streams — вынужденный минимум, но внутри — только векторизация.
@@ -32,3 +32,4 @@ description: Высокопроизводительный Monte Carlo движо
 - compute_metrics и compute_patch_impact возвращают полный data/error/meta envelope
 - Локально < 900 мс на 4000 симуляций
 - Тесты с фиксированным seed проходят determinism
+

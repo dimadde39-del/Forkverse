@@ -28,6 +28,7 @@ MAX_PAYLOAD_BYTES: Final[int] = 1_000_000
 TELEGRAM_TIMEOUT_SECONDS: Final[float] = 20.0
 TELEGRAM_API_BASE_URL: Final[str] = "https://api.telegram.org"
 BOT_TOKEN_ENV: Final[str] = "TELEGRAM_BOT_TOKEN"
+BOT_BRAND_NAME: Final[str] = "MonteRun Analytics"
 MAX_SPAGHETTI_LINES: Final[int] = 50
 PNG_DPI: Final[int] = 160
 FIGURE_SIZE: Final[tuple[float, float]] = (10.8, 6.4)
@@ -290,7 +291,7 @@ def _render_simulation_png(simulation_data: Mapping[str, Any]) -> BytesIO:
     axis.axhline(0.0, color=BANKRUPTCY_COLOR, linewidth=1.8, linestyle="--", zorder=2)
 
     axis.grid(color=GRID_COLOR, alpha=0.12, linewidth=0.8)
-    axis.set_title("ForkVerse Monte Carlo", color=TEXT_COLOR, fontsize=15, pad=12)
+    axis.set_title(f"{BOT_BRAND_NAME} Monte Carlo", color=TEXT_COLOR, fontsize=15, pad=12)
     axis.text(
         0.01,
         0.97,
@@ -333,7 +334,11 @@ def _build_ready_caption(first_name: str | None, params: Mapping[str, Any], simu
     months = int(params["months"])
     delay_months = int(params.get("income_delay_months", 0))
 
-    lead = "Сценарий готов" if not first_name else f"{first_name}, сценарий готов"
+    lead = (
+        f"{BOT_BRAND_NAME}: сценарий готов"
+        if not first_name
+        else f"{first_name}, {BOT_BRAND_NAME}: сценарий готов"
+    )
     lines = [
         f"*{_escape_markdown_v2(lead)}*",
         f"Survival {_escape_markdown_v2(f'{survival_probability:.1f}%')}",
@@ -347,11 +352,17 @@ def _build_ready_caption(first_name: str | None, params: Mapping[str, Any], simu
 
 
 def _build_clarification_text(question: str) -> str:
-    return f"*Нужно одно уточнение*\n{_escape_markdown_v2(question)}"
+    return (
+        f"*{_escape_markdown_v2(BOT_BRAND_NAME)}*\n"
+        f"*Нужно одно уточнение*\n{_escape_markdown_v2(question)}"
+    )
 
 
 def _build_error_text(message: str) -> str:
-    return f"*Не удалось обработать сценарий*\n{_escape_markdown_v2(message)}"
+    return (
+        f"*{_escape_markdown_v2(BOT_BRAND_NAME)}*\n"
+        f"*Не удалось обработать сценарий*\n{_escape_markdown_v2(message)}"
+    )
 
 
 def _send_telegram_message(chat_id: int, text: str) -> dict[str, Any]:
@@ -405,7 +416,7 @@ def _send_telegram_photo(chat_id: int, png_buffer: BytesIO, caption: str) -> dic
             "parse_mode": "MarkdownV2",
         },
         files={
-            "photo": ("forkverse-runway.png", png_buffer, "image/png"),
+            "photo": ("monterun-runway.png", png_buffer, "image/png"),
         },
         timeout=TELEGRAM_TIMEOUT_SECONDS,
     )
@@ -440,7 +451,7 @@ def _send_telegram_photo(chat_id: int, png_buffer: BytesIO, caption: str) -> dic
 
 
 class handler(BaseHTTPRequestHandler):
-    server_version = "ForkVerse"
+    server_version = "MonteRun"
     sys_version = ""
 
     def do_POST(self) -> None:
@@ -653,3 +664,4 @@ class handler(BaseHTTPRequestHandler):
         self.send_header("X-Server-Timing", f"total;dur={elapsed_ms}")
         self.end_headers()
         self.wfile.write(response_bytes)
+

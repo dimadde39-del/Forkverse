@@ -1,6 +1,6 @@
 # {{date}}
 
-Backlinks: [[ForkVerse MOC]] · [[01-Projects/ForkVerse/Current-Status]] · [[02-Areas/Knowledge-Operations]]
+Backlinks: [[MonteRun MOC]] · [[01-Projects/MonteRun/Current-Status]] · [[02-Areas/Knowledge-Operations]]
 
 ## Top Priorities
 - 
@@ -15,8 +15,8 @@ Backlinks: [[ForkVerse MOC]] · [[01-Projects/ForkVerse/Current-Status]] · [[02
 - 
 
 ## Links
-- [[ForkVerse MOC]]
-- [[01-Projects/ForkVerse/Current-Status]]
+- [[MonteRun MOC]]
+- [[01-Projects/MonteRun/Current-Status]]
 - [[03-Resources/MOC]]
 
 ## Backlinks / Related Notes

@@ -41,7 +41,7 @@ DEFAULT_INPUT_COST_PER_MILLION = Decimal("0.32")
 DEFAULT_OUTPUT_COST_PER_MILLION = Decimal("0.89")
 
 SYSTEM_PROMPT = (
-    "Ты циничный и ядовитый SMM-менеджер ForkVerse из Алматы. "
+    "Ты циничный и ядовитый SMM-менеджер MonteRun Analytics из Алматы. "
     "Бьёшь в боль фрилансеров и стартаперов. "
     "Пишешь посты для X с сарказмом, но продаёшь реальную пользу калькулятора."
 )
@@ -116,7 +116,7 @@ class GenerationResult:
 
 
 def parse_args(argv: list[str]) -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="ForkVerse autonomous SMM chronicler")
+    parser = argparse.ArgumentParser(description="MonteRun autonomous SMM chronicler")
     parser.add_argument("--date", dest="run_date", help="Override the run date in YYYY-MM-DD format.")
     parser.add_argument(
         "--dry-run",
@@ -179,7 +179,7 @@ def load_local_env_file(repo_root: Path) -> None:
 
 
 def load_autolog_config(repo_root: Path) -> dict[str, Any]:
-    config_path = repo_root / ".forkverse" / "obsidian-autolog.json"
+    config_path = repo_root / ".monterun" / "obsidian-autolog.json"
     if not config_path.exists():
         return {}
 
@@ -188,7 +188,11 @@ def load_autolog_config(repo_root: Path) -> dict[str, Any]:
 
 def resolve_paths(repo_root: Path, run_date: date, vault_override: str | None) -> Paths:
     config = load_autolog_config(repo_root)
-    vault_root = Path(vault_override or config.get("vaultPath") or (repo_root / "Obsidian")).resolve()
+    vault_root_value = vault_override or config.get("vaultPath") or "Obsidian"
+    vault_root_path = Path(vault_root_value)
+    if not vault_root_path.is_absolute():
+        vault_root_path = repo_root / vault_root_path
+    vault_root = vault_root_path.resolve()
     daily_notes_folder = config.get("dailyNotesFolder", "Daily Notes")
     git_log_folder = config.get("gitLogFolder", "00-Inbox/Git Log")
 
@@ -573,7 +577,7 @@ def build_user_prompt(run_date: date, daily_text: str, paperclip_context: str) -
 
     return (
         f"Дата запуска: {run_date.isoformat()}\n"
-        "Продукт: ForkVerse calculator.\n"
+        "Продукт: MonteRun Analytics calculator.\n"
         "Задача: создать один основной пост для X и две короткие альтернативные подводки.\n"
         "Аудитория: фрилансеры и стартаперы, у которых нет ясности по runway, burn и точке смерти.\n"
         "Продаём не мечту, а реальную пользу: калькулятор помогает трезво посчитать runway и увидеть кассовую яму заранее.\n"
@@ -657,7 +661,7 @@ def render_draft(run_date: date, result: GenerationResult) -> str:
     prompt_tokens = int(result.usage.get("prompt_tokens") or 0)
     completion_tokens = int(result.usage.get("completion_tokens") or 0)
     draft_lines = [
-        f"# ForkVerse X Draft - {run_date.isoformat()}",
+        f"# MonteRun Analytics X Draft - {run_date.isoformat()}",
         "",
         APPROVAL_TAG,
         "",
@@ -913,3 +917,4 @@ if __name__ == "__main__":
     except SmmChroniclerError as exc:
         print(f"{APP_NAME}: {exc}", file=sys.stderr)
         raise SystemExit(1) from exc
+

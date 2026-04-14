@@ -1,5 +1,5 @@
 name: supabase
-description: Production Supabase интеграция ForkVerse. RLS first, schema, triggers, service_role.
+description: Production Supabase интеграция MonteRun. RLS first, schema, triggers, service_role.
 
 ## Hard Rules
 - RLS включён на **каждой** таблице
@@ -31,3 +31,4 @@ description: Production Supabase интеграция ForkVerse. RLS first, sche
 - on delete cascade настроен где нужно
 - Типы Database сгенерированы и используются
 - Usage tracking проверяется перед каждой симуляцией
+
