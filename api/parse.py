@@ -31,6 +31,13 @@ SUPABASE_URL_ENV: Final[str] = "SUPABASE_URL"
 SUPABASE_SERVICE_ROLE_KEY_ENV: Final[str] = "SUPABASE_SERVICE_ROLE_KEY"
 TELEGRAM_CONTEXT_TABLE: Final[str] = "telegram_context"
 SCENARIO_STATE_TABLE: Final[str] = "scenario_state"
+BASE_PARAM_FIELDS: Final[tuple[str, ...]] = (
+    "initial_capital",
+    "monthly_burn",
+    "monthly_income",
+    "income_delay_months",
+    "months",
+)
 PARSER_RESPONSE_SCHEMA: Final[dict[str, Any]] = {
     "type": "object",
     "additionalProperties": False,
@@ -54,13 +61,15 @@ PARSER_RESPONSE_SCHEMA: Final[dict[str, Any]] = {
                 "initial_capital",
                 "monthly_burn",
                 "monthly_income",
+                "income_delay_months",
                 "months",
                 "n_simulations",
             ],
         },
         "question": {"type": ["string", "null"]},
+        "comment": {"type": "string", "minLength": 1},
     },
-    "required": ["status", "params", "question"],
+    "required": ["status", "params", "question", "comment"],
 }
 
 LOGGER = logging.getLogger(__name__)
@@ -514,7 +523,55 @@ def _coerce_int(name: str, value: Any, minimum: int | None = None, maximum: int 
     return coerced
 
 
-def _normalize_llm_payload(payload: dict[str, Any]) -> dict[str, Any]:
+def _has_all_base_params(value: Mapping[str, Any]) -> bool:
+    return all(field in value and value.get(field) is not None for field in BASE_PARAM_FIELDS)
+
+
+def _extract_context_params(parser_input: str) -> dict[str, Any] | None:
+    marker = "BASE_CONTEXT_JSON:"
+    if not parser_input.startswith(marker):
+        return None
+
+    context_line = parser_input[len(marker) :].split("\n", 1)[0].strip()
+    if not context_line:
+        return None
+
+    try:
+        context_payload = json.loads(context_line)
+    except json.JSONDecodeError:
+        return None
+
+    if not isinstance(context_payload, Mapping):
+        return None
+
+    params: dict[str, Any] = {}
+    for context_key in ("base_params", "previous_scenario"):
+        candidate = context_payload.get(context_key)
+        if not isinstance(candidate, Mapping):
+            continue
+
+        for field in BASE_PARAM_FIELDS:
+            value = candidate.get(field)
+            if value is not None:
+                params[field] = value
+
+    return params or None
+
+
+def _merge_params(raw_params: Any, fallback_params: Mapping[str, Any] | None) -> dict[str, Any] | None:
+    merged: dict[str, Any] = dict(fallback_params or {})
+    if isinstance(raw_params, Mapping):
+        for field, value in raw_params.items():
+            if value is not None:
+                merged[field] = value
+
+    return merged if _has_all_base_params(merged) else None
+
+
+def _normalize_llm_payload(
+    payload: dict[str, Any],
+    fallback_params: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
     status = payload.get("status")
     if status not in {"ready", "needs_clarification"}:
         raise ApiProblem(
@@ -523,6 +580,22 @@ def _normalize_llm_payload(payload: dict[str, Any]) -> dict[str, Any]:
             {"field": "status"},
             False,
         )
+
+    comment = payload.get("comment")
+    if not isinstance(comment, str) or not comment.strip():
+        raise ApiProblem(
+            "INTERNAL_ERROR",
+            "LLM returned invalid JSON payload",
+            {"field": "comment"},
+            False,
+        )
+
+    raw_params = payload.get("params")
+    merged_params = _merge_params(raw_params, fallback_params)
+    params_complete = merged_params is not None
+
+    if status == "needs_clarification" and params_complete:
+        status = "ready"
 
     if status == "needs_clarification":
         question = payload.get("question")
@@ -537,10 +610,13 @@ def _normalize_llm_payload(payload: dict[str, Any]) -> dict[str, Any]:
         return {
             "status": "needs_clarification",
             "params": None,
+            "comment": comment.strip(),
             "question": question.strip(),
         }
 
-    raw_params = payload.get("params")
+    if merged_params is not None:
+        raw_params = merged_params
+
     if not isinstance(raw_params, Mapping):
         raise ApiProblem(
             "INTERNAL_ERROR",
@@ -561,6 +637,7 @@ def _normalize_llm_payload(payload: dict[str, Any]) -> dict[str, Any]:
     return {
         "status": "ready",
         "params": params,
+        "comment": comment.strip(),
         "question": None,
     }
 
@@ -749,7 +826,7 @@ def _call_groq(user_text: str) -> dict[str, Any]:
             False,
         )
 
-    return _normalize_llm_payload(llm_payload)
+    return _normalize_llm_payload(llm_payload, _extract_context_params(user_text))
 
 
 _load_local_env_file()
@@ -792,6 +869,7 @@ class handler(BaseHTTPRequestHandler):
                 data = {
                     "status": "ready",
                     "params": params,
+                    "comment": data.get("comment"),
                     **simulation_data,
                 }
                 _persist_scenario_state(

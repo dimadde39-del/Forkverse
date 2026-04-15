@@ -346,12 +346,54 @@ def _build_ready_caption(first_name: str | None, params: Mapping[str, Any], simu
     return "\n".join(lines)
 
 
-def _build_clarification_text(question: str) -> str:
-    return f"*Нужно одно уточнение*\n{_escape_markdown_v2(question)}"
-
-
 def _build_error_text(message: str) -> str:
     return f"*Не удалось обработать сценарий*\n{_escape_markdown_v2(message)}"
+
+
+def _extract_parser_text(parsed: Mapping[str, Any], field: str) -> str:
+    value = parsed.get(field)
+    if not isinstance(value, str):
+        raise ApiProblem(
+            "INTERNAL_ERROR",
+            "LLM returned invalid JSON payload",
+            {"field": field},
+            False,
+        )
+
+    text = value.strip()
+    if not text and field != "question":
+        raise ApiProblem(
+            "INTERNAL_ERROR",
+            "LLM returned invalid JSON payload",
+            {"field": field},
+            False,
+        )
+
+    return text
+
+
+def _build_comment_text(comment: str, trailing_block: str | None = None) -> str:
+    parts = [_escape_markdown_v2(comment)]
+    if trailing_block:
+        parts.append(trailing_block)
+
+    return "\n\n".join(parts)
+
+
+def _build_clarification_text(comment: str, question: str | None) -> str:
+    message = _build_comment_text(comment)
+    if question:
+        message = f"{message}\n\n{_escape_markdown_v2(question)}"
+    return message
+
+
+def _build_ready_caption_with_comment(
+    first_name: str | None,
+    params: Mapping[str, Any],
+    simulation_data: Mapping[str, Any],
+    comment: str,
+) -> str:
+    return _build_comment_text(comment, _build_ready_caption(first_name, params, simulation_data))
 
 
 def _send_telegram_message(chat_id: int, text: str) -> dict[str, Any]:
@@ -457,13 +499,15 @@ class handler(BaseHTTPRequestHandler):
             first_name = _extract_first_name(message)
 
             parsed, simulation_data, _trajectories = _process_parse_flow(user_text, telegram_user_id, request_id)
+            print(json.dumps(parsed, ensure_ascii=False, sort_keys=True), flush=True)
+            comment = _extract_parser_text(parsed, "comment")
             if parsed["status"] == "ready" and simulation_data is not None:
                 png_buffer = _render_simulation_png(simulation_data)
                 try:
                     telegram_response = _send_telegram_photo(
                         chat_id,
                         png_buffer,
-                        _build_ready_caption(first_name, parsed["params"], simulation_data),
+                        _build_ready_caption_with_comment(first_name, parsed["params"], simulation_data, comment),
                     )
                 finally:
                     png_buffer.close()
@@ -478,7 +522,8 @@ class handler(BaseHTTPRequestHandler):
                     "telegram_response": telegram_response,
                 }
             else:
-                telegram_response = _send_telegram_message(chat_id, _build_clarification_text(parsed["question"]))
+                question = _extract_parser_text(parsed, "question") if parsed.get("question") is not None else None
+                telegram_response = _send_telegram_message(chat_id, _build_clarification_text(comment, question))
                 data = {
                     "status": "needs_clarification",
                     "chat_id": chat_id,
