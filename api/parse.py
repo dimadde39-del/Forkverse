@@ -58,9 +58,63 @@ PARSER_RESPONSE_SCHEMA: Final[dict[str, Any]] = {
                 "n_simulations",
             ],
         },
+        "comment": {"type": ["string", "null"]},
         "question": {"type": ["string", "null"]},
     },
-    "required": ["status", "params", "question"],
+    "required": ["status", "params", "comment", "question"],
+    "allOf": [
+        {
+            "if": {
+                "properties": {
+                    "status": {
+                        "const": "ready",
+                    }
+                },
+                "required": ["status"],
+            },
+            "then": {
+                "properties": {
+                    "params": {
+                        "type": ["object", "null"],
+                    },
+                    "comment": {
+                        "type": "string",
+                        "minLength": 1,
+                    },
+                    "question": {
+                        "type": "null",
+                    },
+                },
+                "required": ["params", "comment", "question"],
+            },
+        },
+        {
+            "if": {
+                "properties": {
+                    "status": {
+                        "const": "needs_clarification",
+                    }
+                },
+                "required": ["status"],
+            },
+            "then": {
+                "properties": {
+                    "params": {
+                        "type": "null",
+                    },
+                    "comment": {
+                        "type": "string",
+                        "minLength": 1,
+                    },
+                    "question": {
+                        "type": "string",
+                        "minLength": 1,
+                    },
+                },
+                "required": ["params", "comment", "question"],
+            },
+        },
+    ],
 }
 
 LOGGER = logging.getLogger(__name__)
@@ -524,7 +578,25 @@ def _normalize_llm_payload(payload: dict[str, Any]) -> dict[str, Any]:
             False,
         )
 
+    comment = payload.get("comment")
+    if not isinstance(comment, str) or not comment.strip():
+        raise ApiProblem(
+            "INTERNAL_ERROR",
+            "LLM returned invalid JSON payload",
+            {"field": "comment"},
+            False,
+        )
+
     if status == "needs_clarification":
+        raw_params = payload.get("params")
+        if raw_params is not None:
+            raise ApiProblem(
+                "INTERNAL_ERROR",
+                "LLM returned invalid JSON payload",
+                {"field": "params"},
+                False,
+            )
+
         question = payload.get("question")
         if not isinstance(question, str) or not question.strip():
             raise ApiProblem(
@@ -537,6 +609,7 @@ def _normalize_llm_payload(payload: dict[str, Any]) -> dict[str, Any]:
         return {
             "status": "needs_clarification",
             "params": None,
+            "comment": comment.strip(),
             "question": question.strip(),
         }
 
@@ -546,6 +619,15 @@ def _normalize_llm_payload(payload: dict[str, Any]) -> dict[str, Any]:
             "INTERNAL_ERROR",
             "LLM returned invalid JSON payload",
             {"field": "params"},
+            False,
+        )
+
+    question = payload.get("question")
+    if question is not None:
+        raise ApiProblem(
+            "INTERNAL_ERROR",
+            "LLM returned invalid JSON payload",
+            {"field": "question"},
             False,
         )
 
@@ -561,6 +643,7 @@ def _normalize_llm_payload(payload: dict[str, Any]) -> dict[str, Any]:
     return {
         "status": "ready",
         "params": params,
+        "comment": comment.strip(),
         "question": None,
     }
 

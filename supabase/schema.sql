@@ -63,9 +63,13 @@ create table if not exists public.scenario_state (
   source_text text,
   params jsonb not null default '{}'::jsonb,
   simulation_summary jsonb not null default '{}'::jsonb,
+  roast_history jsonb not null default '[]'::jsonb,
   created_at timestamptz not null default timezone('utc', now()),
   updated_at timestamptz not null default timezone('utc', now())
 );
+
+alter table public.scenario_state
+  add column if not exists roast_history jsonb not null default '[]'::jsonb;
 
 create index if not exists scenario_state_profile_id_idx
   on public.scenario_state (profile_id);

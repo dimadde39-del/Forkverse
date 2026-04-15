@@ -105,6 +105,45 @@ def _coerce_positive_int(field: str, value: Any) -> int:
     return coerced
 
 
+def _extract_parser_text(parsed: Mapping[str, Any], field: str) -> str:
+    value = parsed.get(field)
+    if not isinstance(value, str) or not value.strip():
+        raise ApiProblem(
+            "INTERNAL_ERROR",
+            "LLM returned invalid JSON payload",
+            {"field": field},
+            False,
+        )
+
+    return value.strip()
+
+
+def _coerce_roast_history(value: Any) -> list[str]:
+    if value is None:
+        return []
+
+    if isinstance(value, list):
+        return [entry.strip() for entry in value if isinstance(entry, str) and entry.strip()]
+
+    if isinstance(value, str):
+        stripped = value.strip()
+        if not stripped:
+            return []
+
+        try:
+            decoded = json.loads(stripped)
+        except json.JSONDecodeError:
+            return [stripped]
+
+        if isinstance(decoded, list):
+            return [entry.strip() for entry in decoded if isinstance(entry, str) and entry.strip()]
+
+        if isinstance(decoded, str) and decoded.strip():
+            return [decoded.strip()]
+
+    return []
+
+
 def _require_bot_token() -> str:
     try:
         token = os.environ[BOT_TOKEN_ENV].strip()
@@ -214,6 +253,11 @@ def _process_parse_flow(user_text: str, telegram_user_id: int, request_id: str) 
     parser_context_payload, telegram_context_row, scenario_state_row = parse_api._load_telegram_parser_context(telegram_user_id)
     parser_input = parse_api._build_parser_input(user_text, parser_context_payload)
     parsed = parse_api._call_groq(parser_input)
+    comment = _extract_parser_text(parsed, "comment")
+    _persist_roast_history(
+        telegram_user_id=telegram_user_id,
+        comment=comment,
+    )
 
     if parsed.get("status") != "ready":
         return parsed, None, None
@@ -247,6 +291,54 @@ def _process_parse_flow(user_text: str, telegram_user_id: int, request_id: str) 
     )
 
     return parsed, simulation_data, trajectories
+
+
+def _persist_roast_history(
+    *,
+    telegram_user_id: int,
+    comment: str,
+) -> None:
+    try:
+        supabase_client = parse_api._get_supabase_client()
+    except ApiProblem as exc:
+        LOGGER.warning("Supabase initialization failed during roast_history save: %s", exc.message)
+        return
+
+    try:
+        response = (
+            supabase_client.table(parse_api.SCENARIO_STATE_TABLE)
+            .select("roast_history")
+            .eq("telegram_user_id", telegram_user_id)
+            .limit(1)
+            .execute()
+        )
+        rows = response.data or []
+        existing_history: list[str] = []
+        if rows and isinstance(rows[0], Mapping):
+            existing_history = _coerce_roast_history(rows[0].get("roast_history"))
+
+        existing_history.append(comment)
+        payload = {
+            "telegram_user_id": telegram_user_id,
+            "roast_history": existing_history,
+        }
+        supabase_client.table(parse_api.SCENARIO_STATE_TABLE).upsert(payload, on_conflict="telegram_user_id").execute()
+    except ApiProblem as exc:
+        LOGGER.warning("Supabase initialization failed during roast_history upsert: %s", exc.message)
+    except Exception as exc:
+        if parse_api._is_table_missing_error(exc):
+            LOGGER.warning(
+                "Supabase table %s is missing; roast_history was not persisted",
+                parse_api.SCENARIO_STATE_TABLE,
+            )
+            return
+
+        LOGGER.warning(
+            "Failed to upsert roast_history for Telegram user %s in %s: %s",
+            telegram_user_id,
+            parse_api.SCENARIO_STATE_TABLE,
+            exc,
+        )
 
 
 def _render_simulation_png(simulation_data: Mapping[str, Any]) -> BytesIO:
@@ -365,6 +457,36 @@ def _build_error_text(message: str) -> str:
     )
 
 
+def _build_comment_text(comment: str) -> str:
+    return (
+        f"*{_escape_markdown_v2(BOT_BRAND_NAME)}*\n"
+        f"*Комментарий*\n{_escape_markdown_v2(comment)}"
+    )
+
+
+def _build_ready_caption_with_comment(
+    first_name: str | None,
+    params: Mapping[str, Any],
+    simulation_data: Mapping[str, Any],
+    comment: str,
+) -> str:
+    return "\n".join(
+        [
+            _build_ready_caption(first_name, params, simulation_data),
+            _build_comment_text(comment),
+        ]
+    )
+
+
+def _build_clarification_text_with_comment(comment: str, question: str) -> str:
+    return "\n\n".join(
+        [
+            _build_comment_text(comment),
+            _build_clarification_text(question),
+        ]
+    )
+
+
 def _send_telegram_message(chat_id: int, text: str) -> dict[str, Any]:
     token = _require_bot_token()
     response = requests.post(
@@ -468,13 +590,14 @@ class handler(BaseHTTPRequestHandler):
             first_name = _extract_first_name(message)
 
             parsed, simulation_data, _trajectories = _process_parse_flow(user_text, telegram_user_id, request_id)
+            comment = _extract_parser_text(parsed, "comment")
             if parsed["status"] == "ready" and simulation_data is not None:
                 png_buffer = _render_simulation_png(simulation_data)
                 try:
                     telegram_response = _send_telegram_photo(
                         chat_id,
                         png_buffer,
-                        _build_ready_caption(first_name, parsed["params"], simulation_data),
+                        _build_ready_caption_with_comment(first_name, parsed["params"], simulation_data, comment),
                     )
                 finally:
                     png_buffer.close()
@@ -489,7 +612,11 @@ class handler(BaseHTTPRequestHandler):
                     "telegram_response": telegram_response,
                 }
             else:
-                telegram_response = _send_telegram_message(chat_id, _build_clarification_text(parsed["question"]))
+                question = _extract_parser_text(parsed, "question")
+                telegram_response = _send_telegram_message(
+                    chat_id,
+                    _build_clarification_text_with_comment(comment, question),
+                )
                 data = {
                     "status": "needs_clarification",
                     "chat_id": chat_id,
