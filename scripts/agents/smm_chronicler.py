@@ -41,7 +41,7 @@ DEFAULT_INPUT_COST_PER_MILLION = Decimal("0.32")
 DEFAULT_OUTPUT_COST_PER_MILLION = Decimal("0.89")
 
 SYSTEM_PROMPT = (
-    "Ты циничный и ядовитый SMM-менеджер ForkVerse из Алматы. "
+    "Ты циничный и ядовитый SMM-менеджер MonteRun из Алматы. "
     "Бьёшь в боль фрилансеров и стартаперов. "
     "Пишешь посты для X с сарказмом, но продаёшь реальную пользу калькулятора."
 )
@@ -116,7 +116,7 @@ class GenerationResult:
 
 
 def parse_args(argv: list[str]) -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="ForkVerse autonomous SMM chronicler")
+    parser = argparse.ArgumentParser(description="MonteRun autonomous SMM chronicler")
     parser.add_argument("--date", dest="run_date", help="Override the run date in YYYY-MM-DD format.")
     parser.add_argument(
         "--dry-run",
@@ -573,7 +573,7 @@ def build_user_prompt(run_date: date, daily_text: str, paperclip_context: str) -
 
     return (
         f"Дата запуска: {run_date.isoformat()}\n"
-        "Продукт: ForkVerse calculator.\n"
+        "Продукт: MonteRun calculator.\n"
         "Задача: создать один основной пост для X и две короткие альтернативные подводки.\n"
         "Аудитория: фрилансеры и стартаперы, у которых нет ясности по runway, burn и точке смерти.\n"
         "Продаём не мечту, а реальную пользу: калькулятор помогает трезво посчитать runway и увидеть кассовую яму заранее.\n"
@@ -657,7 +657,7 @@ def render_draft(run_date: date, result: GenerationResult) -> str:
     prompt_tokens = int(result.usage.get("prompt_tokens") or 0)
     completion_tokens = int(result.usage.get("completion_tokens") or 0)
     draft_lines = [
-        f"# ForkVerse X Draft - {run_date.isoformat()}",
+        f"# MonteRun X Draft - {run_date.isoformat()}",
         "",
         APPROVAL_TAG,
         "",
@@ -729,7 +729,6 @@ def main(argv: list[str] | None = None) -> int:
     repo_root = Path(__file__).resolve().parents[2]
     run_date = parse_run_date(args.run_date)
     paths = resolve_paths(repo_root, run_date, args.vault_root)
-    ensure_support_dirs(paths)
 
     run_id = current_local_time().strftime("%Y%m%d-%H%M%S")
     lock_descriptor: int | None = None
@@ -747,6 +746,7 @@ def main(argv: list[str] | None = None) -> int:
         print("Task already claimed by another SMM run. Zero-cost exit.")
         return 0
 
+    ensure_support_dirs(paths)
     budget_text = read_text_strict(paths.budget_note_path, "budget")
     budget_state = parse_budget_state(budget_text, run_date)
     if budget_state.effective_spend >= budget_state.hard_limit:
