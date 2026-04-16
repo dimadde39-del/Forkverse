@@ -24,7 +24,7 @@ try:
 except ZoneInfoNotFoundError:
     LOCAL_TIMEZONE = timezone(timedelta(hours=5), name="Asia/Qyzylorda")
 MODEL_ID = "deepseek/deepseek-chat"
-OPENROUTER_API_URL = "https://openrouter.ai/api/v1/chat/completions"
+OPENROUTER_API_URL = "https://api.deepseek.com/chat/completions"
 TASK_TAG = "#task/for-marketing"
 IN_PROGRESS_TAG = "#task/in-progress/smm"
 APPROVAL_TAG = "#status/needs-approval"
@@ -35,10 +35,9 @@ REQUEST_TIMEOUT_SECONDS = 45
 DEFAULT_MAX_TOKENS = 320
 BUDGET_LIMIT = Decimal("0.50")
 
-# Verified against the OpenRouter model page for deepseek/deepseek-chat on 2026-04-14.
-# Keep env overrides available because provider pricing can change.
-DEFAULT_INPUT_COST_PER_MILLION = Decimal("0.32")
-DEFAULT_OUTPUT_COST_PER_MILLION = Decimal("0.89")
+# Direct DeepSeek night pricing in USD per million tokens.
+DEFAULT_INPUT_COST_PER_MILLION = Decimal("0.14")
+DEFAULT_OUTPUT_COST_PER_MILLION = Decimal("0.28")
 
 SYSTEM_PROMPT = (
     "Ты циничный и ядовитый SMM-менеджер MonteRun из Алматы. "
@@ -529,11 +528,13 @@ def coerce_message_text(message_content: Any) -> str:
 
 def require_api_key(repo_root: Path) -> str:
     load_local_env_file(repo_root)
-    for env_name in ("OPENROUTER_API_KEY", "PROVIDER_API_KEY"):
+    for env_name in ("DEEPSEEK_API_KEY", "OPENROUTER_API_KEY", "PROVIDER_API_KEY"):
         value = os.environ.get(env_name, "").strip()
         if value:
             return value
-    raise SmmChroniclerError("OpenRouter API key is not configured. Set OPENROUTER_API_KEY or PROVIDER_API_KEY.")
+    raise SmmChroniclerError(
+        "API key is not configured. Set DEEPSEEK_API_KEY, OPENROUTER_API_KEY, or PROVIDER_API_KEY."
+    )
 
 
 def load_paperclip_context(paperclip_dir: Path, max_chars: int = 2400) -> str:
