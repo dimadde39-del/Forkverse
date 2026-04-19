@@ -7,6 +7,7 @@ import os
 import re
 import sys
 import time
+import traceback
 import uuid
 from collections.abc import Mapping
 from datetime import datetime, timezone
@@ -144,9 +145,16 @@ class ApiProblem(Exception):
 
 def _load_local_env_file() -> None:
     if not ENV_PATH.exists():
+        LOGGER.info("Local .env not found at %s; continuing with process environment only", ENV_PATH)
         return
 
-    for line in ENV_PATH.read_text(encoding="utf-8").splitlines():
+    try:
+        env_content = ENV_PATH.read_text(encoding="utf-8")
+    except OSError as exc:
+        LOGGER.warning("Failed to read local .env at %s: %s", ENV_PATH, exc)
+        return
+
+    for line in env_content.splitlines():
         stripped = line.strip()
         if not stripped or stripped.startswith("#") or "=" not in stripped:
             continue
@@ -890,6 +898,10 @@ def _call_extraction_stage(parser_input: str) -> dict[str, Any]:
 
 @lru_cache(maxsize=1)
 def _get_math_core():
+    project_root = os.fspath(PROJECT_ROOT)
+    if project_root not in sys.path:
+        sys.path.insert(0, project_root)
+
     try:
         from engine.monte_carlo import MonteRunParams, compute_metrics, run_simulation, simulate
     except Exception as exc:
@@ -1315,7 +1327,7 @@ class handler(BaseHTTPRequestHandler):
             error = _build_error(exc.code, exc.message, exc.details, exc.retryable)
             status_code = exc.http_status
         except Exception:
-            LOGGER.exception("Unhandled parse error", extra={"request_id": request_id})
+            LOGGER.exception(traceback.format_exc())
             data = None
             error = _build_error(
                 "INTERNAL_ERROR",

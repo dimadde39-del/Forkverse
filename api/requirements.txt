@@ -1,5 +1,6 @@
 httpx
 numpy
+openai
 supabase
 requests
 matplotlib
