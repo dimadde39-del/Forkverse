@@ -1,38 +1,34 @@
 from __future__ import annotations
 
+from dataclasses import dataclass, replace
 from typing import Any, Final
 
 import numpy as np
 
 
-MAX_SIMULATIONS: Final[int] = 4000
-DEFAULT_MONTHS: Final[int] = 6
+SIMULATION_PATHS: Final[int] = 1_000
+SIMULATION_MONTHS: Final[int] = 24
+NOISE_BAND: Final[float] = 0.10
+DEFAULT_SEED: Final[int] = 20_260_418
+
+LEGACY_DEFAULT_MONTHS: Final[int] = 6
+LEGACY_MAX_SIMULATIONS: Final[int] = 4_000
 SPAGHETTI_SAMPLE_LIMIT: Final[int] = 50
-SIGMA_INCOME_RATIO: Final[float] = 0.10
-SIGMA_BURN_RATIO: Final[float] = 0.05
-MIN_SIGMA: Final[float] = 1.0
 
 
 class ParameterError(TypeError):
     pass
 
 
-def _as_int(name: str, value: Any, minimum: int | None = None, maximum: int | None = None) -> int:
-    if isinstance(value, bool) or not isinstance(value, (int, np.integer)):
-        raise ParameterError(f"{name} must be an integer")
-
-    coerced = int(value)
-
-    if minimum is not None and coerced < minimum:
-        raise ParameterError(f"{name} must be >= {minimum}")
-
-    if maximum is not None and coerced > maximum:
-        raise ParameterError(f"{name} must be <= {maximum}")
-
-    return coerced
+@dataclass(frozen=True, slots=True)
+class MonteRunParams:
+    cash: float
+    monthly_income: float
+    fixed_expenses: float
+    flexible_expenses: float
 
 
-def _as_number(name: str, value: Any, minimum: float | None = None) -> float:
+def _as_float(name: str, value: Any, minimum: float | None = None) -> float:
     if isinstance(value, bool) or not isinstance(value, (int, float, np.integer, np.floating)):
         raise ParameterError(f"{name} must be numeric")
 
@@ -47,11 +43,171 @@ def _as_number(name: str, value: Any, minimum: float | None = None) -> float:
     return coerced
 
 
-def _as_seed(value: Any) -> int | None:
-    if value is None:
-        return None
+def _as_int(
+    name: str,
+    value: Any,
+    minimum: int | None = None,
+    maximum: int | None = None,
+) -> int:
+    if isinstance(value, bool) or not isinstance(value, (int, np.integer)):
+        raise ParameterError(f"{name} must be an integer")
 
-    return _as_int("seed", value, minimum=0)
+    coerced = int(value)
+
+    if minimum is not None and coerced < minimum:
+        raise ParameterError(f"{name} must be >= {minimum}")
+
+    if maximum is not None and coerced > maximum:
+        raise ParameterError(f"{name} must be <= {maximum}")
+
+    return coerced
+
+
+def _validate_params(params: MonteRunParams) -> MonteRunParams:
+    if not isinstance(params, MonteRunParams):
+        raise ParameterError("params must be a MonteRunParams instance")
+
+    return MonteRunParams(
+        cash=_as_float("cash", params.cash, minimum=0.0),
+        monthly_income=_as_float("monthly_income", params.monthly_income, minimum=0.0),
+        fixed_expenses=_as_float("fixed_expenses", params.fixed_expenses, minimum=0.0),
+        flexible_expenses=_as_float("flexible_expenses", params.flexible_expenses, minimum=0.0),
+    )
+
+
+def _generate_noise(seed: int, n_paths: int, months: int) -> tuple[np.ndarray, np.ndarray]:
+    rng = np.random.default_rng(seed)
+    low = 1.0 - NOISE_BAND
+    high = 1.0 + NOISE_BAND
+
+    income_noise = rng.uniform(low, high, size=(n_paths, months)).astype(np.float64)
+    flexible_noise = rng.uniform(low, high, size=(n_paths, months)).astype(np.float64)
+
+    return income_noise, flexible_noise
+
+
+def _simulate_capital_paths(
+    params: MonteRunParams,
+    *,
+    income_noise: np.ndarray,
+    flexible_noise: np.ndarray,
+    income_delay_months: int = 0,
+) -> np.ndarray:
+    if income_noise.shape != flexible_noise.shape:
+        raise ParameterError("income_noise and flexible_noise must have the same shape")
+
+    realized_income = np.multiply(params.monthly_income, income_noise, dtype=np.float64)
+    realized_flexible_expenses = np.multiply(params.flexible_expenses, flexible_noise, dtype=np.float64)
+
+    if income_delay_months > 0:
+        delay = min(income_delay_months, income_noise.shape[1])
+        realized_income[:, :delay] = 0.0
+
+    monthly_net = realized_income - params.fixed_expenses - realized_flexible_expenses
+    raw_capital = params.cash + np.cumsum(monthly_net, axis=1, dtype=np.float64)
+
+    depleted = np.maximum.accumulate(raw_capital <= 0.0, axis=1)
+    capital_paths = np.where(depleted, 0.0, raw_capital)
+
+    return capital_paths
+
+
+def _prepend_initial_cash(capital_paths: np.ndarray, cash: float) -> np.ndarray:
+    initial_column = np.full((capital_paths.shape[0], 1), float(cash), dtype=np.float64)
+    return np.concatenate((initial_column, capital_paths), axis=1)
+
+
+def _first_month_median_depletes(capital_paths: np.ndarray) -> float:
+    median_capital = np.median(capital_paths, axis=0)
+    depleted_months = np.flatnonzero(median_capital <= 0.0)
+
+    if depleted_months.size == 0:
+        return float(capital_paths.shape[1])
+
+    return float(depleted_months[0] + 1)
+
+
+def _survival_probability_at_month(capital_paths: np.ndarray, month_number: int) -> float:
+    if month_number < 1:
+        raise ParameterError("month_number must be >= 1")
+
+    month_index = min(month_number, capital_paths.shape[1]) - 1
+    survivors = capital_paths[:, month_index] > 0.0
+    return float(np.mean(survivors, dtype=np.float64) * 100.0)
+
+
+def _build_lever_scenarios(params: MonteRunParams) -> tuple[tuple[str, MonteRunParams], ...]:
+    return (
+        (
+            "Cut flexible expenses by 50%",
+            replace(params, flexible_expenses=float(params.flexible_expenses * 0.50)),
+        ),
+        (
+            "Increase monthly income by 20%",
+            replace(params, monthly_income=float(params.monthly_income * 1.20)),
+        ),
+        (
+            "Reduce fixed expenses by 10%",
+            replace(params, fixed_expenses=float(params.fixed_expenses * 0.90)),
+        ),
+    )
+
+
+def _compute_levers(
+    params: MonteRunParams,
+    *,
+    income_noise: np.ndarray,
+    flexible_noise: np.ndarray,
+    base_runway_months: float,
+) -> list[dict[str, float | str]]:
+    levers = [
+        {
+            "action": action,
+            "impact_months": float(
+                _first_month_median_depletes(
+                    _simulate_capital_paths(
+                        lever_params,
+                        income_noise=income_noise,
+                        flexible_noise=flexible_noise,
+                    )
+                )
+                - base_runway_months
+            ),
+        }
+        for action, lever_params in _build_lever_scenarios(params)
+    ]
+
+    levers.sort(key=lambda item: (-float(item["impact_months"]), str(item["action"])))
+    return levers
+
+
+def run_simulation(params: MonteRunParams) -> dict[str, Any]:
+    validated_params = _validate_params(params)
+    income_noise, flexible_noise = _generate_noise(
+        seed=DEFAULT_SEED,
+        n_paths=SIMULATION_PATHS,
+        months=SIMULATION_MONTHS,
+    )
+
+    base_paths = _simulate_capital_paths(
+        validated_params,
+        income_noise=income_noise,
+        flexible_noise=flexible_noise,
+    )
+    base_runway_months = _first_month_median_depletes(base_paths)
+    survival_probability_12m = _survival_probability_at_month(base_paths, 12)
+    levers = _compute_levers(
+        validated_params,
+        income_noise=income_noise,
+        flexible_noise=flexible_noise,
+        base_runway_months=base_runway_months,
+    )
+
+    return {
+        "base_runway_months": float(base_runway_months),
+        "survival_probability_12m": float(survival_probability_12m),
+        "levers": levers,
+    }
 
 
 def simulate(
@@ -59,35 +215,49 @@ def simulate(
     initial_capital: Any,
     monthly_burn: Any,
     monthly_income: Any,
-    months: Any = DEFAULT_MONTHS,
-    n_simulations: Any = MAX_SIMULATIONS,
+    months: Any = LEGACY_DEFAULT_MONTHS,
+    n_simulations: Any = LEGACY_MAX_SIMULATIONS,
     seed: Any = None,
+    income_delay_months: Any = 0,
 ) -> np.ndarray:
-    initial_capital_value = _as_number("initial_capital", initial_capital, minimum=0.0)
-    monthly_burn_value = _as_number("monthly_burn", monthly_burn, minimum=0.0)
-    monthly_income_value = _as_number("monthly_income", monthly_income, minimum=0.0)
+    initial_capital_value = _as_float("initial_capital", initial_capital, minimum=0.0)
+    monthly_burn_value = _as_float("monthly_burn", monthly_burn, minimum=0.0)
+    monthly_income_value = _as_float("monthly_income", monthly_income, minimum=0.0)
     months_value = _as_int("months", months, minimum=1)
-    n_simulations_value = _as_int("n_simulations", n_simulations, minimum=1, maximum=MAX_SIMULATIONS)
-    seed_value = _as_seed(seed)
+    n_simulations_value = _as_int(
+        "n_simulations",
+        n_simulations,
+        minimum=1,
+        maximum=LEGACY_MAX_SIMULATIONS,
+    )
+    income_delay_months_value = _as_int(
+        "income_delay_months",
+        income_delay_months,
+        minimum=0,
+        maximum=months_value,
+    )
+    seed_value = DEFAULT_SEED if seed is None else _as_int("seed", seed, minimum=0)
 
-    rng = np.random.default_rng(seed=seed_value)
-
-    baseline_monthly_delta = monthly_income_value - monthly_burn_value
-    monthly_sigma = max(
-        MIN_SIGMA,
-        (monthly_income_value * SIGMA_INCOME_RATIO) + (monthly_burn_value * SIGMA_BURN_RATIO),
+    params = MonteRunParams(
+        cash=initial_capital_value,
+        monthly_income=monthly_income_value,
+        fixed_expenses=monthly_burn_value,
+        flexible_expenses=0.0,
+    )
+    validated_params = _validate_params(params)
+    income_noise, flexible_noise = _generate_noise(
+        seed=seed_value,
+        n_paths=n_simulations_value,
+        months=months_value,
+    )
+    capital_paths = _simulate_capital_paths(
+        validated_params,
+        income_noise=income_noise,
+        flexible_noise=flexible_noise,
+        income_delay_months=income_delay_months_value,
     )
 
-    monthly_deltas = rng.normal(
-        loc=baseline_monthly_delta,
-        scale=monthly_sigma,
-        size=(n_simulations_value, months_value),
-    )
-
-    cumulative_deltas = np.cumsum(monthly_deltas, axis=1, dtype=np.float64)
-    initial_column = np.full((n_simulations_value, 1), initial_capital_value, dtype=np.float64)
-
-    return np.concatenate((initial_column, initial_column + cumulative_deltas), axis=1)
+    return _prepend_initial_cash(capital_paths, validated_params.cash)
 
 
 def compute_metrics(paths: np.ndarray) -> dict[str, Any]:
@@ -103,7 +273,7 @@ def compute_metrics(paths: np.ndarray) -> dict[str, Any]:
         raise ParameterError("paths must contain at least one month plus the initial state")
 
     percentiles = np.percentile(array, q=np.array([10.0, 50.0, 90.0]), axis=0, method="linear")
-    survival_probability = float(np.mean(np.all(array >= 0.0, axis=1), dtype=np.float64))
+    survival_probability = float(np.mean(np.all(array[:, 1:] > 0.0, axis=1), dtype=np.float64))
 
     sample_size = min(int(array.shape[0]), SPAGHETTI_SAMPLE_LIMIT)
     sample_indices = np.linspace(0, array.shape[0] - 1, num=sample_size, dtype=np.int64)
@@ -119,3 +289,12 @@ def compute_metrics(paths: np.ndarray) -> dict[str, Any]:
         "p90": np.round(percentiles[2], 2).tolist(),
         "spaghetti_sample": spaghetti_sample.tolist(),
     }
+
+
+__all__ = [
+    "MonteRunParams",
+    "ParameterError",
+    "compute_metrics",
+    "run_simulation",
+    "simulate",
+]

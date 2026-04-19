@@ -1,6 +1,6 @@
 # MonteRun Project Canon
 
-_Last canonical update: 2026-04-14_
+_Last canonical update: 2026-04-18_
 
 ## Essence
 MonteRun is a deterministic survival engine, not an AI fortune teller.
@@ -37,3 +37,9 @@ It takes structured user inputs, runs Monte Carlo simulation, and returns a dry 
 - No multi-agent backend chain.
 - Telegram retention is part of the product, not an add-on.
 - Brand language may evolve, but the engine logic stays the same.
+
+## Reference Layer
+- Product scope and launch criteria: [[01-Projects/MonteRun/Specs/MonteRun_PRD]]
+- Document map and build order: [[01-Projects/MonteRun/Specs/00_MonteRun_Function_Document_Map]]
+- Legacy origin document: [[01-Projects/MonteRun/Specs/ForkVerse_MasterPlan]]
+- Detailed feature specs live under [[01-Projects/MonteRun/Specs]]

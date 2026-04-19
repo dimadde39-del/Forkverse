@@ -1,6 +1,6 @@
 # MonteRun Current State
 
-_Last updated: 2026-04-14_
+_Last updated: 2026-04-18_
 
 ## Project Name
 MonteRun.
@@ -36,3 +36,8 @@ MonteRun.
 - Any LLM swap must preserve the parser-only rule.
 - Any product copy change must preserve the dry-verdict positioning.
 - Any backend change must keep simulation ownership in code, not in the model.
+
+## Reference Corpus
+- Full product references now live in [[01-Projects/MonteRun/Specs]].
+- Default deep-read order: PRD -> document map -> relevant feature spec.
+- The imported planning corpus is now stored inside the project vault instead of living only as external `.docx` files.

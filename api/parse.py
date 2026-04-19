@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import importlib
 import json
 import logging
 import os
+import re
 import sys
 import time
 import uuid
@@ -15,61 +17,109 @@ from importlib.util import module_from_spec
 from pathlib import Path
 from typing import Any, Final
 
-import httpx
 import numpy as np
 
 
 SCHEMA_VERSION: Final[str] = "2026-04"
 MAX_PAYLOAD_BYTES: Final[int] = 1_000_000
-MODEL_NAME: Final[str] = "llama-3.3-70b-versatile"
 REQUEST_TIMEOUT_SECONDS: Final[float] = 20.0
 PROJECT_ROOT: Final[Path] = Path(__file__).parent.parent.resolve()
-PROMPT_PATH: Final[Path] = PROJECT_ROOT / "prompts" / "parser_v1.txt"
 ENV_PATH: Final[Path] = PROJECT_ROOT / ".env"
-GROQ_API_URL: Final[str] = "https://api.groq.com/openai/v1/chat/completions"
+
+DEEPSEEK_BASE_URL: Final[str] = "https://api.deepseek.com/v1"
+DEEPSEEK_MODEL: Final[str] = "deepseek-chat"
+DEEPSEEK_API_KEY_ENV: Final[str] = "DEEPSEEK_API_KEY"
+
 SUPABASE_URL_ENV: Final[str] = "SUPABASE_URL"
 SUPABASE_SERVICE_ROLE_KEY_ENV: Final[str] = "SUPABASE_SERVICE_ROLE_KEY"
 TELEGRAM_CONTEXT_TABLE: Final[str] = "telegram_context"
 SCENARIO_STATE_TABLE: Final[str] = "scenario_state"
-BASE_PARAM_FIELDS: Final[tuple[str, ...]] = (
-    "initial_capital",
-    "monthly_burn",
+
+MONTE_RUN_PARAM_FIELDS: Final[tuple[str, ...]] = (
+    "cash",
     "monthly_income",
-    "income_delay_months",
-    "months",
+    "fixed_expenses",
+    "flexible_expenses",
 )
-PARSER_RESPONSE_SCHEMA: Final[dict[str, Any]] = {
-    "type": "object",
-    "additionalProperties": False,
-    "properties": {
-        "status": {
-            "type": "string",
-            "enum": ["ready", "needs_clarification"],
-        },
-        "params": {
-            "type": ["object", "null"],
-            "additionalProperties": False,
-            "properties": {
-                "initial_capital": {"type": "integer"},
-                "monthly_burn": {"type": "integer"},
-                "monthly_income": {"type": "integer"},
-                "income_delay_months": {"type": "integer", "default": 0},
-                "months": {"type": "integer"},
-                "n_simulations": {"type": "integer"},
-            },
-            "required": [
-                "initial_capital",
-                "monthly_burn",
-                "monthly_income",
-                "income_delay_months",
-                "months",
-                "n_simulations",
-            ],
-        },
-        "question": {"type": ["string", "null"]},
-        "comment": {"type": "string", "minLength": 1},
-    },
-    "required": ["status", "params", "question", "comment"],
+LEGACY_SIMULATION_MONTHS: Final[int] = 24
+LEGACY_SIMULATION_PATHS: Final[int] = 1_000
+
+EXTRACTION_SYSTEM_PROMPT: Final[str] = """
+Ты — MonteRun Extraction Layer.
+Твоя задача: вытащить из текста пользователя 4 поля для MonteRunParams:
+- cash
+- monthly_income
+- fixed_expenses
+- flexible_expenses
+
+Верни строго JSON-объект и ничего кроме JSON.
+
+Формат READY:
+{
+  "status": "ready",
+  "params": {
+    "cash": number,
+    "monthly_income": number,
+    "fixed_expenses": number,
+    "flexible_expenses": number
+  },
+  "question": null,
+  "comment": "короткая сухая строка"
+}
+
+Формат NEEDS_CLARIFICATION:
+{
+  "status": "needs_clarification",
+  "params": {
+    "cash": number | null,
+    "monthly_income": number | null,
+    "fixed_expenses": number | null,
+    "flexible_expenses": number | null
+  },
+  "question": "один короткий вопрос по самому блокирующему полю",
+  "comment": "короткая сухая строка о том, чего не хватает"
+}
+
+Правила:
+- Используй BASE_CONTEXT_JSON как доверенную память, если он передан.
+- Если в USER_MESSAGE есть явное новое число, оно важнее контекста.
+- Не выдумывай цифры. Если поля нет даже после BASE_CONTEXT_JSON, верни needs_clarification.
+- Все числа должны быть неотрицательными.
+- Если пользователь дал диапазон дохода, бери нижнюю границу.
+- Если пользователь дал диапазон расходов, бери верхнюю границу.
+- fixed_expenses = обязательные повторяющиеся траты.
+- flexible_expenses = discretionary, variable, optional spend.
+- Не упоминай ForkVerse. Только MonteRun.
+- Не добавляй markdown, объяснения, code fences, лишние ключи или текст вне JSON.
+""".strip()
+
+ROAST_SYSTEM_PROMPT: Final[str] = """
+Ты — MonteRun Roast Layer.
+На входе у тебя user_text, extracted_params и simulation.
+Ты не считаешь математику и не меняешь числа. Ты только формулируешь вердикт.
+
+Верни строго JSON-объект:
+{
+  "verdict": "очень короткий ярлык",
+  "comment": "2-4 коротких предложения"
+}
+
+Правила:
+- Пиши по-русски.
+- Тон: циничный, высокомерный, techno-trash из Алматы.
+- Уместно использовать слова hustle, cooked, runway, ngmi, survival rate.
+- Опирайся только на присланные числа и levers.
+- Если сценарий плохой, говори жёстко и прямо.
+- Если levers слабые, высмеивай это.
+- Не используй markdown, списки, code fences и лишние поля.
+- Не упоминай ForkVerse. Только MonteRun.
+""".strip()
+
+FIELD_QUESTIONS: Final[dict[str, str]] = {
+    "cash": "Сколько у тебя сейчас денег на руках?",
+    "monthly_income": "Какой у тебя средний доход в месяц?",
+    "fixed_expenses": "Сколько у тебя обязательных фиксированных расходов в месяц?",
+    "flexible_expenses": "Сколько у тебя в месяц уходит на гибкие и discretionary траты?",
 }
 
 LOGGER = logging.getLogger(__name__)
@@ -82,12 +132,14 @@ class ApiProblem(Exception):
         message: str,
         details: dict[str, Any] | None = None,
         retryable: bool = False,
+        http_status: int = 400,
     ) -> None:
         super().__init__(message)
         self.code = code
         self.message = message
         self.details = details
         self.retryable = retryable
+        self.http_status = http_status
 
 
 def _load_local_env_file() -> None:
@@ -135,47 +187,303 @@ def _build_error(
     }
 
 
-@lru_cache(maxsize=1)
-def _load_system_prompt() -> str:
-    try:
-        prompt_text = PROMPT_PATH.read_text(encoding="utf-8").strip()
-    except FileNotFoundError as exc:
-        raise ApiProblem(
-            "INTERNAL_ERROR",
-            "Parser prompt is not configured",
-            {"path": str(PROMPT_PATH)},
-            False,
-        ) from exc
-    except OSError as exc:
-        raise ApiProblem(
-            "INTERNAL_ERROR",
-            "Failed to read parser prompt",
-            {"path": str(PROMPT_PATH), "reason": str(exc)},
-            False,
-        ) from exc
+def _clean_text(value: str) -> str:
+    return " ".join(value.split())
 
-    if not prompt_text:
+
+def _parse_numeric_string(value: str) -> float:
+    normalized = value.strip()
+    if not normalized:
+        raise ValueError("empty string")
+
+    normalized = re.sub(r"[^\d,.\-]", "", normalized)
+    if not normalized:
+        raise ValueError("no numeric content")
+
+    if "," in normalized and "." in normalized:
+        normalized = normalized.replace(",", "")
+    elif "," in normalized:
+        integer_part, fractional_part = normalized.rsplit(",", 1)
+        if 1 <= len(fractional_part) <= 2:
+            normalized = f"{integer_part.replace(',', '')}.{fractional_part}"
+        else:
+            normalized = normalized.replace(",", "")
+
+    return float(normalized)
+
+
+def _coerce_non_negative_float(
+    name: str,
+    value: Any,
+    *,
+    stage: str,
+    maximum: float | None = None,
+) -> float:
+    if isinstance(value, bool):
         raise ApiProblem(
-            "INTERNAL_ERROR",
-            "Parser prompt is empty",
-            {"path": str(PROMPT_PATH)},
+            "INVALID_PARAMS",
+            f"DeepSeek {stage} returned invalid MonteRun inputs",
+            {"stage": stage, "field": name, "reason": "boolean_not_allowed"},
             False,
+            400,
         )
 
-    return prompt_text
+    try:
+        numeric_value = (
+            _parse_numeric_string(value)
+            if isinstance(value, str)
+            else float(value)
+        )
+    except (TypeError, ValueError) as exc:
+        raise ApiProblem(
+            "INVALID_PARAMS",
+            f"DeepSeek {stage} returned invalid MonteRun inputs",
+            {"stage": stage, "field": name, "reason": "non_numeric_value"},
+            False,
+            400,
+        ) from exc
+
+    if not np.isfinite(numeric_value):
+        raise ApiProblem(
+            "INVALID_PARAMS",
+            f"DeepSeek {stage} returned invalid MonteRun inputs",
+            {"stage": stage, "field": name, "reason": "non_finite_value"},
+            False,
+            400,
+        )
+
+    if numeric_value < 0.0:
+        raise ApiProblem(
+            "INVALID_PARAMS",
+            f"DeepSeek {stage} returned invalid MonteRun inputs",
+            {"stage": stage, "field": name, "reason": "negative_value"},
+            False,
+            400,
+        )
+
+    if maximum is not None and numeric_value > maximum:
+        raise ApiProblem(
+            "INVALID_PARAMS",
+            f"DeepSeek {stage} returned invalid MonteRun inputs",
+            {"stage": stage, "field": name, "reason": "above_maximum", "maximum": maximum},
+            False,
+            400,
+        )
+
+    return float(numeric_value)
 
 
-def _require_api_key() -> str:
-    api_key = os.environ.get("PROVIDER_API_KEY", "").strip()
+def _coerce_positive_int(name: str, value: Any) -> int:
+    if isinstance(value, bool):
+        raise ApiProblem(
+            "INVALID_PARAMS",
+            f"{name} must be a positive integer",
+            {"field": name, "reason": "boolean_not_allowed"},
+            False,
+            400,
+        )
+
+    try:
+        coerced = int(value)
+    except (TypeError, ValueError) as exc:
+        raise ApiProblem(
+            "INVALID_PARAMS",
+            f"{name} must be a positive integer",
+            {"field": name, "reason": "non_integer_value"},
+            False,
+            400,
+        ) from exc
+
+    if coerced < 1:
+        raise ApiProblem(
+            "INVALID_PARAMS",
+            f"{name} must be a positive integer",
+            {"field": name, "reason": "below_minimum", "minimum": 1},
+            False,
+            400,
+        )
+
+    return coerced
+
+
+@lru_cache(maxsize=1)
+def _get_deepseek_client() -> Any:
+    api_key = os.getenv(DEEPSEEK_API_KEY_ENV, "").strip()
     if not api_key:
         raise ApiProblem(
             "INTERNAL_ERROR",
-            "Provider API key is not configured",
-            {"env": "PROVIDER_API_KEY"},
+            "DeepSeek API key is not configured",
+            {"env": DEEPSEEK_API_KEY_ENV},
             False,
+            500,
         )
 
-    return api_key
+    try:
+        openai_module = importlib.import_module("openai")
+    except ModuleNotFoundError as exc:
+        raise ApiProblem(
+            "INTERNAL_ERROR",
+            "Official OpenAI client is not installed",
+            {"package": "openai"},
+            False,
+            500,
+        ) from exc
+
+    openai_client = getattr(openai_module, "OpenAI", None)
+    if openai_client is None:
+        raise ApiProblem(
+            "INTERNAL_ERROR",
+            "Official OpenAI client is unavailable",
+            {"package": "openai", "class": "OpenAI"},
+            False,
+            500,
+        )
+
+    try:
+        return openai_client(
+            api_key=api_key,
+            base_url=DEEPSEEK_BASE_URL,
+            timeout=REQUEST_TIMEOUT_SECONDS,
+        )
+    except Exception as exc:
+        raise ApiProblem(
+            "INTERNAL_ERROR",
+            "Failed to initialize DeepSeek client",
+            {"reason": str(exc)},
+            False,
+            500,
+        ) from exc
+
+
+def _response_to_mapping(response: Any, *, stage: str) -> dict[str, Any]:
+    if hasattr(response, "model_dump"):
+        try:
+            dumped = response.model_dump(mode="python")
+        except TypeError:
+            dumped = response.model_dump()
+        if isinstance(dumped, Mapping):
+            return dict(dumped)
+
+    if isinstance(response, Mapping):
+        return dict(response)
+
+    raise ApiProblem(
+        "INVALID_PARAMS",
+        f"DeepSeek {stage} response was malformed",
+        {"stage": stage},
+        False,
+        400,
+    )
+
+
+def _extract_response_text(response: Any, *, stage: str) -> str:
+    response_body = _response_to_mapping(response, stage=stage)
+    choices = response_body.get("choices")
+
+    if not isinstance(choices, list) or not choices:
+        raise ApiProblem(
+            "INVALID_PARAMS",
+            f"DeepSeek {stage} response was empty",
+            {"stage": stage},
+            False,
+            400,
+        )
+
+    first_choice = choices[0]
+    if not isinstance(first_choice, Mapping):
+        raise ApiProblem(
+            "INVALID_PARAMS",
+            f"DeepSeek {stage} response was malformed",
+            {"stage": stage},
+            False,
+            400,
+        )
+
+    message = first_choice.get("message")
+    if not isinstance(message, Mapping):
+        raise ApiProblem(
+            "INVALID_PARAMS",
+            f"DeepSeek {stage} response was malformed",
+            {"stage": stage},
+            False,
+            400,
+        )
+
+    content = message.get("content")
+    if isinstance(content, str) and content.strip():
+        return content.strip()
+
+    if isinstance(content, list):
+        text_chunks = []
+        for item in content:
+            if isinstance(item, Mapping):
+                text_value = item.get("text")
+                if isinstance(text_value, str) and text_value.strip():
+                    text_chunks.append(text_value.strip())
+        if text_chunks:
+            return "\n".join(text_chunks)
+
+    raise ApiProblem(
+        "INVALID_PARAMS",
+        f"DeepSeek {stage} response was empty",
+        {"stage": stage},
+        False,
+        400,
+    )
+
+
+def _call_deepseek_json(
+    *,
+    system_prompt: str,
+    user_content: str,
+    stage: str,
+    temperature: float,
+) -> dict[str, Any]:
+    client = _get_deepseek_client()
+
+    try:
+        response = client.chat.completions.create(
+            model=DEEPSEEK_MODEL,
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_content},
+            ],
+            response_format={"type": "json_object"},
+            temperature=temperature,
+        )
+    except Exception as exc:
+        LOGGER.exception("DeepSeek %s request failed", stage)
+        raise ApiProblem(
+            "INTERNAL_ERROR",
+            f"DeepSeek {stage} request failed",
+            {"stage": stage},
+            True,
+            502,
+        ) from exc
+
+    content = _extract_response_text(response, stage=stage)
+
+    try:
+        payload = json.loads(content)
+    except json.JSONDecodeError as exc:
+        raise ApiProblem(
+            "INVALID_PARAMS",
+            f"DeepSeek {stage} returned invalid JSON",
+            {"stage": stage, "reason": "invalid_json"},
+            False,
+            400,
+        ) from exc
+
+    if not isinstance(payload, Mapping):
+        raise ApiProblem(
+            "INVALID_PARAMS",
+            f"DeepSeek {stage} returned invalid JSON",
+            {"stage": stage, "reason": "non_object"},
+            False,
+            400,
+        )
+
+    return dict(payload)
 
 
 @lru_cache(maxsize=1)
@@ -188,6 +496,7 @@ def _load_supabase_sdk():
             "supabase-py is not installed",
             {"package": "supabase"},
             False,
+            500,
         )
 
     module = module_from_spec(spec)
@@ -206,6 +515,7 @@ def _load_supabase_sdk():
             "Failed to load supabase-py",
             {"package": "supabase", "reason": str(exc)},
             False,
+            500,
         ) from exc
 
     return module
@@ -213,17 +523,16 @@ def _load_supabase_sdk():
 
 @lru_cache(maxsize=1)
 def _get_supabase_client():
-    supabase_url = os.environ.get(SUPABASE_URL_ENV, "").strip()
-    supabase_service_role_key = os.environ.get(SUPABASE_SERVICE_ROLE_KEY_ENV, "").strip()
+    supabase_url = os.getenv(SUPABASE_URL_ENV, "").strip()
+    supabase_service_role_key = os.getenv(SUPABASE_SERVICE_ROLE_KEY_ENV, "").strip()
 
     if not supabase_url or not supabase_service_role_key:
         raise ApiProblem(
             "INTERNAL_ERROR",
             "Supabase is not configured",
-            {
-                "env": [SUPABASE_URL_ENV, SUPABASE_SERVICE_ROLE_KEY_ENV],
-            },
+            {"env": [SUPABASE_URL_ENV, SUPABASE_SERVICE_ROLE_KEY_ENV]},
             False,
+            500,
         )
 
     supabase_sdk = _load_supabase_sdk()
@@ -236,6 +545,7 @@ def _get_supabase_client():
             "Failed to initialize Supabase client",
             {"reason": str(exc)},
             False,
+            500,
         ) from exc
 
 
@@ -278,7 +588,14 @@ def _extract_first_text(row: Mapping[str, Any], fields: tuple[str, ...]) -> str 
 
 def _fetch_optional_supabase_row(table: str, *, telegram_user_id: int) -> dict[str, Any] | None:
     try:
-        response = _get_supabase_client().table(table).select("*").eq("telegram_user_id", telegram_user_id).limit(1).execute()
+        response = (
+            _get_supabase_client()
+            .table(table)
+            .select("*")
+            .eq("telegram_user_id", telegram_user_id)
+            .limit(1)
+            .execute()
+        )
     except ApiProblem:
         raise
     except Exception as exc:
@@ -335,8 +652,8 @@ def _build_parser_input(user_text: str, parser_context_payload: Mapping[str, Any
     return (
         "BASE_CONTEXT_JSON:"
         f"{context_json}\n"
-        "Используй BASE_CONTEXT_JSON как доверенную базу для всех полей, которых нет в новом сообщении. "
-        "Если новое сообщение явно меняет поле, новое сообщение важнее.\n"
+        "Use BASE_CONTEXT_JSON as trusted prior memory. "
+        "If USER_MESSAGE explicitly overrides a field, the new explicit value wins.\n"
         f"USER_MESSAGE:{user_text}"
     )
 
@@ -407,19 +724,22 @@ def _persist_scenario_state(
     simulation_data: Mapping[str, Any],
     telegram_context_row: Mapping[str, Any] | None,
     scenario_state_row: Mapping[str, Any] | None,
+    comment: str | None = None,
+    verdict: str | None = None,
 ) -> None:
     if telegram_user_id is None:
         return
 
-    simulation_summary = {
+    simulation_summary: dict[str, Any] = {
         "status": "ready",
-        "survival_probability": simulation_data.get("survival_probability"),
-        "n_simulations": simulation_data.get("n_simulations"),
-        "months": simulation_data.get("months"),
-        "p10": simulation_data.get("p10"),
-        "p50": simulation_data.get("p50"),
-        "p90": simulation_data.get("p90"),
+        "base_runway_months": simulation_data.get("base_runway_months"),
+        "survival_probability_12m": simulation_data.get("survival_probability_12m"),
+        "levers": simulation_data.get("levers"),
     }
+    if comment:
+        simulation_summary["comment"] = comment
+    if verdict:
+        simulation_summary["verdict"] = verdict
 
     try:
         profile_id = _resolve_profile_id(telegram_user_id, telegram_context_row, scenario_state_row)
@@ -450,83 +770,6 @@ def _persist_scenario_state(
         LOGGER.warning("Failed to upsert scenario_state for Telegram user %s: %s", telegram_user_id, exc)
 
 
-def _coerce_int(name: str, value: Any, minimum: int | None = None, maximum: int | None = None) -> int:
-    if isinstance(value, bool):
-        raise ApiProblem(
-            "INTERNAL_ERROR",
-            "LLM returned invalid JSON payload",
-            {"field": name, "reason": "boolean_not_allowed"},
-            False,
-        )
-
-    if isinstance(value, int):
-        coerced = value
-    elif isinstance(value, float):
-        if not value.is_integer():
-            raise ApiProblem(
-                "INTERNAL_ERROR",
-                "LLM returned invalid JSON payload",
-                {"field": name, "reason": "non_integral_number"},
-                False,
-            )
-        coerced = int(value)
-    elif isinstance(value, str):
-        stripped = value.strip()
-        if not stripped:
-            raise ApiProblem(
-                "INTERNAL_ERROR",
-                "LLM returned invalid JSON payload",
-                {"field": name, "reason": "empty_string"},
-                False,
-            )
-        try:
-            numeric_value = float(stripped)
-        except ValueError as exc:
-            raise ApiProblem(
-                "INTERNAL_ERROR",
-                "LLM returned invalid JSON payload",
-                {"field": name, "reason": "non_numeric_string"},
-                False,
-            ) from exc
-        if not numeric_value.is_integer():
-            raise ApiProblem(
-                "INTERNAL_ERROR",
-                "LLM returned invalid JSON payload",
-                {"field": name, "reason": "non_integral_string"},
-                False,
-            )
-        coerced = int(numeric_value)
-    else:
-        raise ApiProblem(
-            "INTERNAL_ERROR",
-            "LLM returned invalid JSON payload",
-            {"field": name, "reason": "unsupported_type"},
-            False,
-        )
-
-    if minimum is not None and coerced < minimum:
-        raise ApiProblem(
-            "INTERNAL_ERROR",
-            "LLM returned invalid JSON payload",
-            {"field": name, "reason": "below_minimum", "minimum": minimum},
-            False,
-        )
-
-    if maximum is not None and coerced > maximum:
-        raise ApiProblem(
-            "INTERNAL_ERROR",
-            "LLM returned invalid JSON payload",
-            {"field": name, "reason": "above_maximum", "maximum": maximum},
-            False,
-        )
-
-    return coerced
-
-
-def _has_all_base_params(value: Mapping[str, Any]) -> bool:
-    return all(field in value and value.get(field) is not None for field in BASE_PARAM_FIELDS)
-
-
 def _extract_context_params(parser_input: str) -> dict[str, Any] | None:
     marker = "BASE_CONTEXT_JSON:"
     if not parser_input.startswith(marker):
@@ -550,7 +793,7 @@ def _extract_context_params(parser_input: str) -> dict[str, Any] | None:
         if not isinstance(candidate, Mapping):
             continue
 
-        for field in BASE_PARAM_FIELDS:
+        for field in MONTE_RUN_PARAM_FIELDS:
             value = candidate.get(field)
             if value is not None:
                 params[field] = value
@@ -558,287 +801,468 @@ def _extract_context_params(parser_input: str) -> dict[str, Any] | None:
     return params or None
 
 
-def _merge_params(raw_params: Any, fallback_params: Mapping[str, Any] | None) -> dict[str, Any] | None:
+def _merge_extracted_params(
+    raw_params: Any,
+    fallback_params: Mapping[str, Any] | None,
+) -> dict[str, Any]:
     merged: dict[str, Any] = dict(fallback_params or {})
+
     if isinstance(raw_params, Mapping):
-        for field, value in raw_params.items():
+        for field in MONTE_RUN_PARAM_FIELDS:
+            value = raw_params.get(field)
             if value is not None:
                 merged[field] = value
 
-    return merged if _has_all_base_params(merged) else None
+    return merged
 
 
-def _normalize_llm_payload(
+def _missing_param_fields(value: Mapping[str, Any]) -> list[str]:
+    return [field for field in MONTE_RUN_PARAM_FIELDS if value.get(field) is None]
+
+
+def _build_clarification_question(missing_fields: list[str]) -> str:
+    if not missing_fields:
+        return "Что у тебя сейчас по cash, income и расходам?"
+
+    return FIELD_QUESTIONS[missing_fields[0]]
+
+
+def _normalize_extraction_payload(
     payload: dict[str, Any],
     fallback_params: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     status = payload.get("status")
     if status not in {"ready", "needs_clarification"}:
         raise ApiProblem(
-            "INTERNAL_ERROR",
-            "LLM returned invalid JSON payload",
-            {"field": "status"},
+            "INVALID_PARAMS",
+            "DeepSeek extraction returned invalid JSON",
+            {"stage": "extraction", "field": "status"},
             False,
+            400,
         )
 
     comment = payload.get("comment")
     if not isinstance(comment, str) or not comment.strip():
         raise ApiProblem(
-            "INTERNAL_ERROR",
-            "LLM returned invalid JSON payload",
-            {"field": "comment"},
+            "INVALID_PARAMS",
+            "DeepSeek extraction returned invalid JSON",
+            {"stage": "extraction", "field": "comment"},
             False,
+            400,
         )
+    cleaned_comment = _clean_text(comment)
 
-    raw_params = payload.get("params")
-    merged_params = _merge_params(raw_params, fallback_params)
-    params_complete = merged_params is not None
+    merged_params = _merge_extracted_params(payload.get("params"), fallback_params)
+    missing_fields = _missing_param_fields(merged_params)
 
-    if status == "needs_clarification" and params_complete:
-        status = "ready"
-
-    if status == "needs_clarification":
-        question = payload.get("question")
-        if not isinstance(question, str) or not question.strip():
-            raise ApiProblem(
-                "INTERNAL_ERROR",
-                "LLM returned invalid JSON payload",
-                {"field": "question"},
-                False,
-            )
-
+    if not missing_fields:
+        normalized_params = {
+            field: _coerce_non_negative_float(field, merged_params[field], stage="extraction")
+            for field in MONTE_RUN_PARAM_FIELDS
+        }
         return {
-            "status": "needs_clarification",
-            "params": None,
-            "comment": comment.strip(),
-            "question": question.strip(),
+            "status": "ready",
+            "params": normalized_params,
+            "question": None,
+            "comment": cleaned_comment,
         }
 
-    if merged_params is not None:
-        raw_params = merged_params
+    question = payload.get("question")
+    cleaned_question = _clean_text(question) if isinstance(question, str) and question.strip() else _build_clarification_question(missing_fields)
 
-    if not isinstance(raw_params, Mapping):
+    return {
+        "status": "needs_clarification",
+        "params": None,
+        "question": cleaned_question,
+        "comment": cleaned_comment,
+    }
+
+
+def _call_extraction_stage(parser_input: str) -> dict[str, Any]:
+    raw_payload = _call_deepseek_json(
+        system_prompt=EXTRACTION_SYSTEM_PROMPT,
+        user_content=parser_input,
+        stage="extraction",
+        temperature=0.0,
+    )
+    return _normalize_extraction_payload(raw_payload, _extract_context_params(parser_input))
+
+
+@lru_cache(maxsize=1)
+def _get_math_core():
+    try:
+        from engine.monte_carlo import MonteRunParams, compute_metrics, run_simulation, simulate
+    except Exception as exc:
         raise ApiProblem(
             "INTERNAL_ERROR",
-            "LLM returned invalid JSON payload",
-            {"field": "params"},
+            "MonteRun math core is unavailable",
+            {"reason": str(exc)},
             False,
+            500,
+        ) from exc
+
+    return MonteRunParams, run_simulation, simulate, compute_metrics
+
+
+def _serialize_monte_run_params(params: Any) -> dict[str, float]:
+    return {
+        "cash": float(params.cash),
+        "monthly_income": float(params.monthly_income),
+        "fixed_expenses": float(params.fixed_expenses),
+        "flexible_expenses": float(params.flexible_expenses),
+    }
+
+
+def _build_monte_run_params(raw_params: Mapping[str, Any]) -> Any:
+    missing_fields = _missing_param_fields(raw_params)
+    if missing_fields:
+        raise ApiProblem(
+            "INVALID_PARAMS",
+            "DeepSeek returned incomplete MonteRun inputs",
+            {"missing_fields": missing_fields},
+            False,
+            400,
         )
 
-    params = {
-        "initial_capital": _coerce_int("initial_capital", raw_params.get("initial_capital"), minimum=0),
-        "monthly_burn": _coerce_int("monthly_burn", raw_params.get("monthly_burn"), minimum=0),
-        "monthly_income": _coerce_int("monthly_income", raw_params.get("monthly_income"), minimum=0),
-        "income_delay_months": _coerce_int("income_delay_months", raw_params.get("income_delay_months", 0), minimum=0),
-        "months": _coerce_int("months", raw_params.get("months", 6), minimum=1),
-        "n_simulations": _coerce_int("n_simulations", raw_params.get("n_simulations", 100), minimum=1, maximum=4000),
+    MonteRunParams, _, _, _ = _get_math_core()
+    return MonteRunParams(
+        cash=_coerce_non_negative_float("cash", raw_params.get("cash"), stage="extraction"),
+        monthly_income=_coerce_non_negative_float("monthly_income", raw_params.get("monthly_income"), stage="extraction"),
+        fixed_expenses=_coerce_non_negative_float("fixed_expenses", raw_params.get("fixed_expenses"), stage="extraction"),
+        flexible_expenses=_coerce_non_negative_float("flexible_expenses", raw_params.get("flexible_expenses"), stage="extraction"),
+    )
+
+
+def _normalize_simulation_result(raw_result: Any) -> dict[str, Any]:
+    if not isinstance(raw_result, Mapping):
+        raise ApiProblem(
+            "INVALID_PARAMS",
+            "MonteRun math core returned an invalid response",
+            {"stage": "simulation", "reason": "non_object_result"},
+            False,
+            400,
+        )
+
+    raw_levers = raw_result.get("levers")
+    if not isinstance(raw_levers, list) or len(raw_levers) != 3:
+        raise ApiProblem(
+            "INVALID_PARAMS",
+            "MonteRun math core returned an invalid levers payload",
+            {
+                "stage": "simulation",
+                "reason": "invalid_levers",
+                "expected_count": 3,
+                "actual_count": len(raw_levers) if isinstance(raw_levers, list) else None,
+            },
+            False,
+            400,
+        )
+
+    normalized_levers: list[dict[str, Any]] = []
+    for index, lever in enumerate(raw_levers):
+        if not isinstance(lever, Mapping):
+            raise ApiProblem(
+                "INVALID_PARAMS",
+                "MonteRun math core returned an invalid lever",
+                {"stage": "simulation", "index": index, "reason": "non_object_lever"},
+                False,
+                400,
+            )
+
+        action = lever.get("action")
+        if not isinstance(action, str) or not action.strip():
+            raise ApiProblem(
+                "INVALID_PARAMS",
+                "MonteRun math core returned an invalid lever action",
+                {"stage": "simulation", "index": index},
+                False,
+                400,
+            )
+
+        normalized_levers.append(
+            {
+                "action": action.strip(),
+                "impact_months": _coerce_non_negative_float(
+                    f"levers[{index}].impact_months",
+                    lever.get("impact_months"),
+                    stage="simulation",
+                ),
+            }
+        )
+
+    normalized_levers.sort(key=lambda item: (-float(item["impact_months"]), str(item["action"])))
+
+    return {
+        "base_runway_months": _coerce_non_negative_float(
+            "base_runway_months",
+            raw_result.get("base_runway_months"),
+            stage="simulation",
+        ),
+        "survival_probability_12m": _coerce_non_negative_float(
+            "survival_probability_12m",
+            raw_result.get("survival_probability_12m"),
+            stage="simulation",
+            maximum=100.0,
+        ),
+        "levers": normalized_levers,
+    }
+
+
+def _run_math_core(params: Any) -> dict[str, Any]:
+    _, run_simulation, _, _ = _get_math_core()
+
+    try:
+        raw_result = run_simulation(params)
+    except Exception as exc:
+        LOGGER.exception("MonteRun simulation failed")
+        raise ApiProblem(
+            "INVALID_PARAMS",
+            "MonteRun simulation failed",
+            {"stage": "simulation"},
+            False,
+            400,
+        ) from exc
+
+    return _normalize_simulation_result(raw_result)
+
+
+def _normalize_roast_payload(payload: dict[str, Any]) -> dict[str, str]:
+    verdict = payload.get("verdict")
+    comment = payload.get("comment")
+
+    if not isinstance(verdict, str) or not verdict.strip():
+        raise ApiProblem(
+            "INVALID_PARAMS",
+            "DeepSeek roast returned invalid JSON",
+            {"stage": "roast", "field": "verdict"},
+            False,
+            400,
+        )
+
+    if not isinstance(comment, str) or not comment.strip():
+        raise ApiProblem(
+            "INVALID_PARAMS",
+            "DeepSeek roast returned invalid JSON",
+            {"stage": "roast", "field": "comment"},
+            False,
+            400,
+        )
+
+    cleaned_verdict = _clean_text(verdict)
+    cleaned_comment = _clean_text(comment)
+
+    if "forkverse" in cleaned_verdict.casefold() or "forkverse" in cleaned_comment.casefold():
+        raise ApiProblem(
+            "INVALID_PARAMS",
+            "DeepSeek roast returned forbidden brand mention",
+            {"stage": "roast", "reason": "forbidden_brand"},
+            False,
+            400,
+        )
+
+    return {
+        "verdict": cleaned_verdict,
+        "comment": cleaned_comment,
+    }
+
+
+def _call_roast_stage(
+    *,
+    user_text: str,
+    extracted_params: Mapping[str, Any],
+    simulation_result: Mapping[str, Any],
+) -> dict[str, str]:
+    roast_input = {
+        "user_text": user_text,
+        "extracted_params": dict(extracted_params),
+        "simulation": dict(simulation_result),
+    }
+
+    raw_payload = _call_deepseek_json(
+        system_prompt=ROAST_SYSTEM_PROMPT,
+        user_content=json.dumps(roast_input, ensure_ascii=False, separators=(",", ":")),
+        stage="roast",
+        temperature=0.9,
+    )
+
+    return _normalize_roast_payload(raw_payload)
+
+
+def _build_ready_data(
+    *,
+    params: Any,
+    roast: Mapping[str, str],
+    simulation_result: Mapping[str, Any],
+) -> dict[str, Any]:
+    normalized_roast = _normalize_roast_payload(dict(roast))
+    normalized_result = _normalize_simulation_result(simulation_result)
+
+    return {
+        "status": "ready",
+        "params": _serialize_monte_run_params(params),
+        "question": None,
+        "verdict": normalized_roast["verdict"],
+        "comment": normalized_roast["comment"],
+        **normalized_result,
+    }
+
+
+def _build_needs_clarification_data(extraction_result: Mapping[str, Any]) -> dict[str, Any]:
+    comment = extraction_result.get("comment")
+    question = extraction_result.get("question")
+
+    if not isinstance(comment, str) or not comment.strip():
+        raise ApiProblem(
+            "INVALID_PARAMS",
+            "DeepSeek extraction returned invalid JSON",
+            {"stage": "extraction", "field": "comment"},
+            False,
+            400,
+        )
+
+    if not isinstance(question, str) or not question.strip():
+        raise ApiProblem(
+            "INVALID_PARAMS",
+            "DeepSeek extraction returned invalid JSON",
+            {"stage": "extraction", "field": "question"},
+            False,
+            400,
+        )
+
+    return {
+        "status": "needs_clarification",
+        "params": None,
+        "question": _clean_text(question),
+        "comment": _clean_text(comment),
+    }
+
+
+def _extract_parser_text(parsed: Mapping[str, Any], field: str) -> str:
+    value = parsed.get(field)
+    if not isinstance(value, str):
+        raise ApiProblem(
+            "INVALID_PARAMS",
+            "Parser response was malformed",
+            {"field": field},
+            False,
+            400,
+        )
+
+    text = value.strip()
+    if not text and field != "question":
+        raise ApiProblem(
+            "INVALID_PARAMS",
+            "Parser response was malformed",
+            {"field": field},
+            False,
+            400,
+        )
+
+    return text
+
+
+def _call_groq(user_text: str) -> dict[str, Any]:
+    extracted = _call_extraction_stage(user_text)
+    if extracted.get("status") != "ready":
+        return extracted
+
+    raw_params = extracted.get("params")
+    if not isinstance(raw_params, Mapping):
+        raise ApiProblem(
+            "INVALID_PARAMS",
+            "DeepSeek extraction returned invalid params payload",
+            {"stage": "extraction", "field": "params"},
+            False,
+            400,
+        )
+
+    legacy_params = {
+        "initial_capital": int(round(float(raw_params["cash"]))),
+        "monthly_burn": int(round(float(raw_params["fixed_expenses"]) + float(raw_params["flexible_expenses"]))),
+        "monthly_income": int(round(float(raw_params["monthly_income"]))),
+        "income_delay_months": 0,
+        "months": LEGACY_SIMULATION_MONTHS,
+        "n_simulations": LEGACY_SIMULATION_PATHS,
     }
 
     return {
         "status": "ready",
-        "params": params,
-        "comment": comment.strip(),
+        "params": legacy_params,
         "question": None,
+        "comment": extracted["comment"],
     }
 
 
 def _run_simulation(
-    initial_capital: int,
-    monthly_income: int,
-    monthly_burn: int,
-    months: int = 36,
-    n_simulations: int = 100,
-    income_delay_months: int = 0,
+    initial_capital: Any,
+    monthly_income: Any,
+    monthly_burn: Any,
+    months: Any = LEGACY_SIMULATION_MONTHS,
+    n_simulations: Any = LEGACY_SIMULATION_PATHS,
+    income_delay_months: Any = 0,
 ) -> list[list[float]]:
-    initial_capital_value = _coerce_int("initial_capital", initial_capital, minimum=0)
-    monthly_income_value = _coerce_int("monthly_income", monthly_income, minimum=0)
-    monthly_burn_value = _coerce_int("monthly_burn", monthly_burn, minimum=0)
-    months_value = _coerce_int("months", months, minimum=1)
-    n_simulations_value = _coerce_int("n_simulations", n_simulations, minimum=1, maximum=4000)
-    income_delay_months_value = _coerce_int("income_delay_months", income_delay_months, minimum=0)
+    _, _, simulate, _ = _get_math_core()
 
-    if initial_capital_value == 0:
-        return np.zeros((n_simulations_value, months_value + 1), dtype=np.float64).tolist()
+    try:
+        paths = simulate(
+            initial_capital=initial_capital,
+            monthly_income=monthly_income,
+            monthly_burn=monthly_burn,
+            months=months,
+            n_simulations=n_simulations,
+            income_delay_months=income_delay_months,
+        )
+    except Exception as exc:
+        LOGGER.exception("Legacy MonteRun trajectory simulation failed")
+        raise ApiProblem(
+            "INVALID_PARAMS",
+            "MonteRun trajectory generation failed",
+            {"stage": "simulation"},
+            False,
+            400,
+        ) from exc
 
-    rng = np.random.default_rng()
-    income_noise = rng.normal(1.0, 0.15, size=(n_simulations_value, months_value))
-    burn_noise = rng.normal(1.0, 0.15, size=(n_simulations_value, months_value))
-
-    realized_income = np.maximum(0.0, float(monthly_income_value) * income_noise)
-    realized_burn = np.maximum(0.0, float(monthly_burn_value) * burn_noise)
-
-    if income_delay_months_value > 0:
-        delayed_months = min(income_delay_months_value, months_value)
-        realized_income[:, :delayed_months] = 0.0
-
-    monthly_changes = realized_income - realized_burn
-
-    capital_paths = float(initial_capital_value) + np.cumsum(monthly_changes, axis=1, dtype=np.float64)
-    bankrupt_mask = np.maximum.accumulate(capital_paths <= 0.0, axis=1)
-    capital_paths = np.where(bankrupt_mask, 0.0, capital_paths)
-
-    initial_column = np.full((n_simulations_value, 1), float(initial_capital_value), dtype=np.float64)
-    trajectories = np.concatenate((initial_column, capital_paths), axis=1)
-
-    return np.round(trajectories, 2).tolist()
+    return np.asarray(paths, dtype=np.float64).tolist()
 
 
 def _build_simulation_response(trajectories: list[list[float]]) -> dict[str, Any]:
-    array = np.asarray(trajectories, dtype=np.float64)
-    if array.ndim != 2 or array.shape[0] < 1 or array.shape[1] < 2:
-        raise RuntimeError("Simulation output must be a non-empty 2D array with horizon data")
+    _, _, _, compute_metrics = _get_math_core()
 
-    percentiles = np.percentile(array, q=np.array([10.0, 50.0, 90.0]), axis=0, method="linear")
-    survival_probability = float(np.mean(np.all(array[:, 1:] > 0.0, axis=1), dtype=np.float64))
-    sample_size = min(int(array.shape[0]), 50)
-    sample_indices = np.linspace(0, array.shape[0] - 1, num=sample_size, dtype=np.int64)
-
-    return {
-        "months": np.arange(array.shape[1], dtype=np.int64).tolist(),
-        "n_simulations": int(array.shape[0]),
-        "survival_probability": survival_probability,
-        "p10": np.round(percentiles[0], 2).tolist(),
-        "p50": np.round(percentiles[1], 2).tolist(),
-        "p90": np.round(percentiles[2], 2).tolist(),
-        "spaghetti_sample": np.round(array[sample_indices], 2).tolist(),
-    }
-
-
-def _extract_response_text(response_body: dict[str, Any]) -> str:
-    choices = response_body.get("choices")
-    if not isinstance(choices, list) or not choices:
-        raise ApiProblem(
-            "INTERNAL_ERROR",
-            "LLM response was empty",
-            None,
-            False,
-        )
-
-    first_choice = choices[0]
-    if not isinstance(first_choice, Mapping):
-        raise ApiProblem(
-            "INTERNAL_ERROR",
-            "LLM response was empty",
-            None,
-            False,
-        )
-
-    message = first_choice.get("message")
-    if not isinstance(message, Mapping):
-        raise ApiProblem(
-            "INTERNAL_ERROR",
-            "LLM response was empty",
-            None,
-            False,
-        )
-
-    content = message.get("content")
-    if not isinstance(content, str) or not content.strip():
-        raise ApiProblem(
-            "INTERNAL_ERROR",
-            "LLM response was empty",
-            None,
-            False,
-        )
-
-    return content.strip()
-
-
-def _call_groq(user_text: str) -> dict[str, Any]:
     try:
-        system_prompt = _load_system_prompt()
-    except ApiProblem:
-        raise
+        result = compute_metrics(np.asarray(trajectories, dtype=np.float64))
     except Exception as exc:
+        LOGGER.exception("Legacy MonteRun metrics build failed")
         raise ApiProblem(
-            "INTERNAL_ERROR",
-            "Failed to load parser prompt",
-            {"path": str(PROMPT_PATH), "reason": str(exc)},
+            "INVALID_PARAMS",
+            "MonteRun metrics generation failed",
+            {"stage": "simulation"},
             False,
+            400,
         ) from exc
 
-    api_key = _require_api_key()
-
-    payload = {
-        "model": MODEL_NAME,
-        "messages": [
-            {
-                "role": "system",
-                "content": system_prompt,
-            },
-            {
-                "role": "user",
-                "content": user_text,
-            }
-        ],
-        "response_format": {"type": "json_object"},
-    }
-
-    headers = {
-        "Authorization": f"Bearer {api_key}",
-        "Content-Type": "application/json",
-    }
-
-    try:
-        with httpx.Client(timeout=REQUEST_TIMEOUT_SECONDS) as client:
-            response = client.post(GROQ_API_URL, headers=headers, json=payload)
-
-            if response.status_code >= 400:
-                error_details = response.text
-                raise ApiProblem(
-                    "INTERNAL_ERROR",
-                    f"LLM API Error {response.status_code}: {error_details}",
-                    None,
-                    False,
-                )
-            response.raise_for_status()
-    except httpx.TimeoutException as exc:
-        raise ApiProblem("INTERNAL_ERROR", "LLM request timed out", None, True) from exc
-    except httpx.RequestError as exc:
-        raise ApiProblem("INTERNAL_ERROR", f"Network error: {str(exc)}", None, True) from exc
-
-    try:
-        response_body = response.json()
-    except json.JSONDecodeError as exc:
+    if not isinstance(result, Mapping):
         raise ApiProblem(
-            "INTERNAL_ERROR",
-            "LLM provider returned invalid JSON",
-            None,
+            "INVALID_PARAMS",
+            "MonteRun metrics generation failed",
+            {"stage": "simulation", "reason": "non_object_result"},
             False,
-        ) from exc
-
-    candidate_text = _extract_response_text(response_body)
-    try:
-        llm_payload = json.loads(candidate_text)
-    except json.JSONDecodeError as exc:
-        raise ApiProblem(
-            "INTERNAL_ERROR",
-            "LLM returned invalid JSON",
-            {"reason": "invalid_json"},
-            False,
-        ) from exc
-
-    if not isinstance(llm_payload, dict):
-        raise ApiProblem(
-            "INTERNAL_ERROR",
-            "LLM returned invalid JSON",
-            {"reason": "non_object"},
-            False,
+            400,
         )
 
-    return _normalize_llm_payload(llm_payload, _extract_context_params(user_text))
+    return dict(result)
 
 
 _load_local_env_file()
 
 
 class handler(BaseHTTPRequestHandler):
-    server_version = "ForkVerse"
+    server_version = "MonteRun"
     sys_version = ""
 
     def do_POST(self) -> None:
         request_id = f"req_{uuid.uuid4().hex[:12]}"
         started_at = time.perf_counter()
+        status_code = 200
 
         try:
             body = self._read_json_body()
@@ -846,45 +1270,50 @@ class handler(BaseHTTPRequestHandler):
             telegram_user_id = self._extract_optional_telegram_user_id(body)
             parser_context_payload, telegram_context_row, scenario_state_row = _load_telegram_parser_context(telegram_user_id)
             parser_input = _build_parser_input(user_text, parser_context_payload)
-            data = _call_groq(parser_input)
-            if data.get("status") == "ready":
-                params = data.get("params")
-                if not isinstance(params, dict):
+
+            extraction_result = _call_extraction_stage(parser_input)
+            if extraction_result.get("status") == "needs_clarification":
+                data = _build_needs_clarification_data(extraction_result)
+            else:
+                raw_params = extraction_result.get("params")
+                if not isinstance(raw_params, Mapping):
                     raise ApiProblem(
-                        "INTERNAL_ERROR",
-                        "LLM returned invalid JSON payload",
-                        {"field": "params"},
+                        "INVALID_PARAMS",
+                        "DeepSeek extraction returned invalid params payload",
+                        {"stage": "extraction", "field": "params"},
                         False,
+                        400,
                     )
 
-                trajectories = _run_simulation(
-                    params["initial_capital"],
-                    params["monthly_income"],
-                    params["monthly_burn"],
-                    months=params["months"],
-                    n_simulations=params["n_simulations"],
-                    income_delay_months=params.get("income_delay_months", 0),
+                monte_run_params = _build_monte_run_params(raw_params)
+                simulation_result = _run_math_core(monte_run_params)
+                roast = _call_roast_stage(
+                    user_text=user_text,
+                    extracted_params=_serialize_monte_run_params(monte_run_params),
+                    simulation_result=simulation_result,
                 )
-                simulation_data = _build_simulation_response(trajectories)
-                data = {
-                    "status": "ready",
-                    "params": params,
-                    "comment": data.get("comment"),
-                    **simulation_data,
-                }
+                data = _build_ready_data(
+                    params=monte_run_params,
+                    roast=roast,
+                    simulation_result=simulation_result,
+                )
                 _persist_scenario_state(
                     telegram_user_id=telegram_user_id,
                     request_id=request_id,
                     source_text=user_text,
-                    params=params,
-                    simulation_data=simulation_data,
+                    params=_serialize_monte_run_params(monte_run_params),
+                    simulation_data=simulation_result,
                     telegram_context_row=telegram_context_row,
                     scenario_state_row=scenario_state_row,
+                    comment=roast["comment"],
+                    verdict=roast["verdict"],
                 )
+
             error = None
         except ApiProblem as exc:
             data = None
             error = _build_error(exc.code, exc.message, exc.details, exc.retryable)
+            status_code = exc.http_status
         except Exception:
             LOGGER.exception("Unhandled parse error", extra={"request_id": request_id})
             data = None
@@ -894,9 +1323,15 @@ class handler(BaseHTTPRequestHandler):
                 None,
                 False,
             )
+            status_code = 500
 
         meta = _build_meta(request_id, started_at)
-        self._send_envelope({"data": data, "error": error, "meta": meta}, meta["simulation_time_ms"], request_id)
+        self._send_envelope(
+            {"data": data, "error": error, "meta": meta},
+            meta["simulation_time_ms"],
+            request_id,
+            status_code=status_code,
+        )
 
     def do_GET(self) -> None:
         self._send_method_not_allowed()
@@ -921,6 +1356,7 @@ class handler(BaseHTTPRequestHandler):
                 "Content-Length header is required",
                 {"header": "Content-Length"},
                 False,
+                400,
             )
 
         try:
@@ -931,6 +1367,7 @@ class handler(BaseHTTPRequestHandler):
                 "Invalid Content-Length header",
                 {"header": "Content-Length", "value": content_length_header},
                 False,
+                400,
             ) from exc
 
         if content_length <= 0:
@@ -939,6 +1376,7 @@ class handler(BaseHTTPRequestHandler):
                 "Request body is required",
                 {"min_bytes": 1},
                 False,
+                400,
             )
 
         if content_length >= MAX_PAYLOAD_BYTES:
@@ -947,6 +1385,7 @@ class handler(BaseHTTPRequestHandler):
                 "Payload too large",
                 {"max_bytes": MAX_PAYLOAD_BYTES - 1},
                 False,
+                400,
             )
 
         raw_body = self.rfile.read(content_length)
@@ -956,6 +1395,7 @@ class handler(BaseHTTPRequestHandler):
                 "Incomplete request body",
                 {"expected_bytes": content_length, "received_bytes": len(raw_body)},
                 False,
+                400,
             )
 
         if len(raw_body) >= MAX_PAYLOAD_BYTES:
@@ -964,6 +1404,7 @@ class handler(BaseHTTPRequestHandler):
                 "Payload too large",
                 {"max_bytes": MAX_PAYLOAD_BYTES - 1},
                 False,
+                400,
             )
 
         try:
@@ -974,6 +1415,7 @@ class handler(BaseHTTPRequestHandler):
                 "Request body must be valid UTF-8 JSON",
                 None,
                 False,
+                400,
             ) from exc
         except json.JSONDecodeError as exc:
             raise ApiProblem(
@@ -981,6 +1423,7 @@ class handler(BaseHTTPRequestHandler):
                 "Request body must be valid JSON",
                 {"line": exc.lineno, "column": exc.colno},
                 False,
+                400,
             ) from exc
 
         if not isinstance(payload, dict):
@@ -989,6 +1432,7 @@ class handler(BaseHTTPRequestHandler):
                 "Request body must be a JSON object",
                 {"type": type(payload).__name__},
                 False,
+                400,
             )
 
         return payload
@@ -1001,6 +1445,7 @@ class handler(BaseHTTPRequestHandler):
                 "text is required",
                 {"field": "text"},
                 False,
+                400,
             )
 
         return text.strip()
@@ -1009,15 +1454,7 @@ class handler(BaseHTTPRequestHandler):
         if "telegram_user_id" not in body or body["telegram_user_id"] is None:
             return None
 
-        try:
-            return _coerce_int("telegram_user_id", body.get("telegram_user_id"), minimum=1)
-        except ApiProblem as exc:
-            raise ApiProblem(
-                "INVALID_PARAMS",
-                "telegram_user_id must be a positive integer",
-                exc.details,
-                False,
-            ) from exc
+        return _coerce_positive_int("telegram_user_id", body.get("telegram_user_id"))
 
     def _send_method_not_allowed(self) -> None:
         request_id = f"req_{uuid.uuid4().hex[:12]}"
@@ -1038,7 +1475,7 @@ class handler(BaseHTTPRequestHandler):
             separators=(",", ":"),
         ).encode("utf-8")
 
-        self.send_response(200)
+        self.send_response(405)
         self.send_header("Allow", "POST")
         self.send_header("Cache-Control", "no-store")
         self.send_header("Content-Type", "application/json; charset=utf-8")
@@ -1048,14 +1485,21 @@ class handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(payload)
 
-    def _send_envelope(self, payload: dict[str, Any], elapsed_ms: int, request_id: str) -> None:
+    def _send_envelope(
+        self,
+        payload: dict[str, Any],
+        elapsed_ms: int,
+        request_id: str,
+        *,
+        status_code: int,
+    ) -> None:
         response_bytes = json.dumps(
             payload,
             ensure_ascii=False,
             separators=(",", ":"),
         ).encode("utf-8")
 
-        self.send_response(200)
+        self.send_response(status_code)
         self.send_header("Cache-Control", "no-store")
         self.send_header("Content-Type", "application/json; charset=utf-8")
         self.send_header("Content-Length", str(len(response_bytes)))
