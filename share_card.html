@@ -1,0 +1,832 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>MonteRun Share Card</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='18' fill='%230A0A0A'/%3E%3Ccircle cx='32' cy='32' r='14' fill='%2300FFAA'/%3E%3C/svg%3E">
+  <style>
+    :root {
+      --bg: #0a0a0a;
+      --surface-1: #101010;
+      --surface-2: #141414;
+      --surface-3: #171717;
+      --line: #222222;
+      --line-soft: rgba(255, 255, 255, 0.05);
+      --text-primary: #ffffff;
+      --text-secondary: #aaaaaa;
+      --text-muted: #666666;
+      --accent: #00ffaa;
+      --accent-soft: rgba(0, 255, 170, 0.12);
+      --accent-glow: rgba(0, 255, 170, 0.18);
+      --shadow-card: 0 24px 90px rgba(0, 0, 0, 0.65);
+      --radius: 28px;
+      --radius-sm: 18px;
+      --font-sans: Inter, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      --font-mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    html,
+    body {
+      margin: 0;
+      min-height: 100%;
+      background:
+        radial-gradient(circle at top right, rgba(0, 255, 170, 0.08), transparent 24rem),
+        radial-gradient(circle at bottom left, rgba(255, 255, 255, 0.05), transparent 28rem),
+        var(--bg);
+      color: var(--text-primary);
+      font-family: var(--font-sans);
+      -webkit-font-smoothing: antialiased;
+      text-rendering: optimizeLegibility;
+    }
+
+    body {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 32px;
+      overflow-x: hidden;
+    }
+
+    body::before {
+      content: "";
+      position: fixed;
+      inset: 0;
+      background-image:
+        linear-gradient(rgba(255, 255, 255, 0.02) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(255, 255, 255, 0.02) 1px, transparent 1px);
+      background-size: 96px 96px;
+      mask-image: radial-gradient(circle at center, black 38%, transparent 100%);
+      opacity: 0.28;
+      pointer-events: none;
+    }
+
+    .page-shell {
+      position: relative;
+      width: min(100%, 1120px);
+    }
+
+    .page-shell::before,
+    .page-shell::after {
+      content: "";
+      position: absolute;
+      inset: 18px;
+      border-radius: calc(var(--radius) + 16px);
+      border: 1px solid rgba(255, 255, 255, 0.025);
+      pointer-events: none;
+    }
+
+    .page-shell::after {
+      inset: -18px;
+      border-color: rgba(0, 255, 170, 0.06);
+      filter: blur(14px);
+      opacity: 0.5;
+    }
+
+    .share-card {
+      position: relative;
+      isolation: isolate;
+      display: grid;
+      grid-template-rows: auto auto auto 1fr auto;
+      gap: 28px;
+      width: 100%;
+      min-height: 760px;
+      padding: 28px;
+      background:
+        linear-gradient(180deg, rgba(255, 255, 255, 0.025), rgba(255, 255, 255, 0.01)),
+        linear-gradient(160deg, rgba(255, 255, 255, 0.015), transparent 44%),
+        var(--surface-1);
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      box-shadow: var(--shadow-card);
+      overflow: hidden;
+    }
+
+    .share-card::before {
+      content: "";
+      position: absolute;
+      inset: 0;
+      background:
+        linear-gradient(120deg, rgba(0, 255, 170, 0.06), transparent 26%),
+        radial-gradient(circle at top right, rgba(0, 255, 170, 0.10), transparent 30%),
+        linear-gradient(180deg, transparent, rgba(255, 255, 255, 0.02));
+      pointer-events: none;
+      z-index: -1;
+    }
+
+    .share-card__header,
+    .share-card__footer {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 16px;
+    }
+
+    .share-card__header {
+      padding-bottom: 16px;
+      border-bottom: 1px solid var(--line-soft);
+    }
+
+    .share-card__brand {
+      display: inline-flex;
+      align-items: center;
+      gap: 12px;
+      font-size: 0.78rem;
+      font-weight: 650;
+      letter-spacing: 0.24em;
+      text-transform: uppercase;
+      color: var(--text-primary);
+    }
+
+    .share-card__brand::before {
+      content: "";
+      width: 11px;
+      height: 11px;
+      border-radius: 999px;
+      background:
+        radial-gradient(circle at 30% 30%, rgba(255, 255, 255, 0.85), transparent 30%),
+        var(--accent);
+      box-shadow:
+        0 0 0 1px rgba(0, 255, 170, 0.16),
+        0 0 24px var(--accent-glow);
+      flex: 0 0 auto;
+    }
+
+    .share-card__timestamp {
+      display: inline-flex;
+      align-items: center;
+      gap: 10px;
+      max-width: min(48vw, 320px);
+      font-family: var(--font-mono);
+      font-size: 0.76rem;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      color: var(--text-secondary);
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    .share-card__timestamp::before {
+      content: "SIM";
+      display: inline-block;
+      padding: 4px 8px;
+      border-radius: 999px;
+      border: 1px solid rgba(0, 255, 170, 0.16);
+      background: rgba(0, 255, 170, 0.05);
+      color: var(--accent);
+      letter-spacing: 0.16em;
+      flex: 0 0 auto;
+    }
+
+    .share-card__hero {
+      display: grid;
+      grid-template-columns: minmax(0, 1.45fr) minmax(240px, 0.95fr);
+      gap: 24px;
+      align-items: end;
+      padding: 6px 0 8px;
+    }
+
+    .share-card__runway-block {
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+      min-width: 0;
+    }
+
+    .share-card__eyebrow,
+    .share-card__section-kicker,
+    .share-card__metric-label {
+      font-size: 0.72rem;
+      letter-spacing: 0.22em;
+      text-transform: uppercase;
+      color: var(--text-secondary);
+    }
+
+    .share-card__runway {
+      display: flex;
+      align-items: flex-end;
+      gap: 14px;
+      min-width: 0;
+      line-height: 0.88;
+    }
+
+    .share-card__runway-value {
+      min-width: 0;
+      font-family: var(--font-mono);
+      font-size: clamp(4.6rem, 10.2vw, 8.8rem);
+      font-weight: 700;
+      letter-spacing: -0.08em;
+      color: var(--text-primary);
+      text-shadow: 0 0 42px rgba(255, 255, 255, 0.03);
+      white-space: nowrap;
+    }
+
+    .share-card__runway-unit {
+      transform: translateY(-0.46rem);
+      font-size: clamp(0.95rem, 1.8vw, 1.2rem);
+      letter-spacing: 0.26em;
+      text-transform: uppercase;
+      color: var(--accent);
+      white-space: nowrap;
+    }
+
+    .share-card__hero-note {
+      max-width: 28rem;
+      font-size: 0.94rem;
+      line-height: 1.5;
+      color: var(--text-secondary);
+    }
+
+    .share-card__metric {
+      position: relative;
+      min-height: 100%;
+      padding: 22px;
+      border: 1px solid var(--line);
+      border-radius: calc(var(--radius-sm) + 2px);
+      background:
+        linear-gradient(180deg, rgba(255, 255, 255, 0.025), transparent),
+        var(--surface-2);
+      display: flex;
+      flex-direction: column;
+      justify-content: flex-end;
+      gap: 14px;
+      overflow: hidden;
+    }
+
+    .share-card__metric::before {
+      content: "";
+      position: absolute;
+      inset: 0;
+      border-radius: inherit;
+      background: linear-gradient(180deg, rgba(0, 255, 170, 0.08), transparent 50%);
+      opacity: 0.5;
+      pointer-events: none;
+    }
+
+    .share-card__metric-row {
+      display: flex;
+      align-items: baseline;
+      justify-content: space-between;
+      gap: 12px;
+    }
+
+    .share-card__metric-value {
+      font-family: var(--font-mono);
+      font-size: clamp(2.5rem, 5vw, 3.75rem);
+      font-weight: 700;
+      line-height: 0.95;
+      letter-spacing: -0.05em;
+      color: var(--accent);
+      text-shadow: 0 0 24px rgba(0, 255, 170, 0.10);
+    }
+
+    .share-card__metric-label {
+      max-width: 12ch;
+      text-align: right;
+      line-height: 1.5;
+    }
+
+    .share-card__verdict {
+      display: grid;
+      gap: 14px;
+      max-width: 58rem;
+      padding: 24px 24px 20px;
+      border: 1px solid var(--line);
+      border-radius: var(--radius-sm);
+      background:
+        linear-gradient(180deg, rgba(255, 255, 255, 0.015), transparent 65%),
+        var(--surface-2);
+    }
+
+    .share-card__verdict-text {
+      margin: 0;
+      font-size: clamp(1.15rem, 2.1vw, 1.7rem);
+      line-height: 1.25;
+      font-weight: 540;
+      color: var(--text-primary);
+      max-width: 24ch;
+      display: -webkit-box;
+      -webkit-box-orient: vertical;
+      -webkit-line-clamp: 2;
+      overflow: hidden;
+    }
+
+    .share-card__levers {
+      display: grid;
+      gap: 18px;
+      align-content: start;
+    }
+
+    .share-card__lever-grid {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 16px;
+    }
+
+    .lever-card {
+      position: relative;
+      display: grid;
+      gap: 20px;
+      align-content: space-between;
+      min-height: 180px;
+      padding: 20px;
+      border: 1px solid var(--line);
+      border-radius: var(--radius-sm);
+      background:
+        linear-gradient(180deg, rgba(255, 255, 255, 0.02), transparent 60%),
+        var(--surface-3);
+      overflow: hidden;
+    }
+
+    .lever-card::before {
+      content: "";
+      position: absolute;
+      inset: 0 auto auto 0;
+      width: 100%;
+      height: 1px;
+      background: linear-gradient(90deg, rgba(0, 255, 170, 0.45), transparent 55%);
+      opacity: 0.8;
+    }
+
+    .lever-card__meta {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      font-family: var(--font-mono);
+      font-size: 0.72rem;
+      letter-spacing: 0.18em;
+      text-transform: uppercase;
+      color: var(--text-muted);
+    }
+
+    .lever-card__index {
+      color: var(--accent);
+    }
+
+    .lever-card__body {
+      display: grid;
+      gap: 12px;
+      min-width: 0;
+    }
+
+    .lever-card__title {
+      min-width: 0;
+      font-size: 1.03rem;
+      line-height: 1.35;
+      color: var(--text-primary);
+      display: -webkit-box;
+      -webkit-box-orient: vertical;
+      -webkit-line-clamp: 2;
+      overflow: hidden;
+    }
+
+    .lever-card__impact {
+      display: inline-flex;
+      width: fit-content;
+      max-width: 100%;
+      padding: 8px 10px;
+      border-radius: 999px;
+      border: 1px solid rgba(0, 255, 170, 0.14);
+      background: var(--accent-soft);
+      font-family: var(--font-mono);
+      font-size: 0.83rem;
+      letter-spacing: 0.12em;
+      text-transform: uppercase;
+      color: var(--accent);
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    .share-card__footer {
+      margin-top: auto;
+      padding-top: 18px;
+      border-top: 1px solid var(--line-soft);
+      color: var(--text-muted);
+      font-size: 0.78rem;
+      letter-spacing: 0.16em;
+      text-transform: uppercase;
+    }
+
+    .share-card__footer strong {
+      color: var(--text-secondary);
+      font-weight: 600;
+    }
+
+    @media (max-width: 920px) {
+      body {
+        padding: 22px;
+      }
+
+      .share-card {
+        min-height: auto;
+        gap: 24px;
+        padding: 24px;
+      }
+
+      .share-card__hero {
+        grid-template-columns: 1fr;
+      }
+
+      .share-card__metric {
+        min-height: 180px;
+      }
+
+      .share-card__lever-grid {
+        grid-template-columns: 1fr;
+      }
+
+      .lever-card {
+        min-height: 148px;
+      }
+
+      .share-card__verdict-text {
+        max-width: none;
+      }
+    }
+
+    @media (max-width: 640px) {
+      body {
+        padding: 16px;
+      }
+
+      .page-shell::before,
+      .page-shell::after {
+        display: none;
+      }
+
+      .share-card {
+        gap: 20px;
+        padding: 18px;
+        border-radius: 22px;
+      }
+
+      .share-card__header,
+      .share-card__footer {
+        align-items: flex-start;
+        flex-direction: column;
+      }
+
+      .share-card__header {
+        padding-bottom: 12px;
+      }
+
+      .share-card__timestamp {
+        max-width: 100%;
+      }
+
+      .share-card__runway {
+        gap: 10px;
+        align-items: baseline;
+      }
+
+      .share-card__runway-value {
+        font-size: clamp(3.5rem, 16vw, 5.4rem);
+      }
+
+      .share-card__runway-unit {
+        transform: none;
+        font-size: 0.84rem;
+        letter-spacing: 0.18em;
+      }
+
+      .share-card__metric {
+        padding: 18px;
+        min-height: 150px;
+      }
+
+      .share-card__metric-value {
+        font-size: clamp(2rem, 11vw, 3rem);
+      }
+
+      .share-card__verdict {
+        padding: 18px;
+      }
+
+      .share-card__verdict-text {
+        font-size: 1.08rem;
+        line-height: 1.3;
+      }
+
+      .lever-card {
+        padding: 18px;
+        min-height: 138px;
+      }
+    }
+  </style>
+</head>
+<body>
+  <div class="page-shell">
+    <main class="share-card" aria-label="MonteRun Share Card">
+      <header class="share-card__header">
+        <div class="share-card__brand">MonteRun</div>
+        <time class="share-card__timestamp" id="card-timestamp">Loading</time>
+      </header>
+
+      <section class="share-card__hero" aria-label="Runway and Survival">
+        <div class="share-card__runway-block">
+          <div class="share-card__eyebrow">Simulation Result</div>
+          <div class="share-card__runway">
+            <div class="share-card__runway-value" id="runway-value">0.0</div>
+            <div class="share-card__runway-unit" id="runway-unit">MONTHS</div>
+          </div>
+          <div class="share-card__hero-note" id="hero-note">
+            Deterministic survival estimate. No optimism was harmed in this calculation.
+          </div>
+        </div>
+
+        <div class="share-card__metric">
+          <div class="share-card__metric-row">
+            <div class="share-card__metric-value" id="survival-value">0%</div>
+            <div class="share-card__metric-label">Survival Probability 12m</div>
+          </div>
+        </div>
+      </section>
+
+      <section class="share-card__verdict" aria-label="Verdict Block">
+        <div class="share-card__section-kicker">Verdict</div>
+        <p class="share-card__verdict-text" id="verdict-text">Verdict is loading.</p>
+      </section>
+
+      <section class="share-card__levers" aria-label="Fastest ways to extend survival">
+        <div class="share-card__section-kicker">Fastest ways to extend survival</div>
+        <div class="share-card__lever-grid" id="lever-grid">
+          <article class="lever-card">
+            <div class="lever-card__meta">
+              <span class="lever-card__index">01</span>
+              <span>Impact</span>
+            </div>
+            <div class="lever-card__body">
+              <div class="lever-card__title">Lever loading</div>
+              <div class="lever-card__impact">+0.0 MONTHS</div>
+            </div>
+          </article>
+          <article class="lever-card">
+            <div class="lever-card__meta">
+              <span class="lever-card__index">02</span>
+              <span>Impact</span>
+            </div>
+            <div class="lever-card__body">
+              <div class="lever-card__title">Lever loading</div>
+              <div class="lever-card__impact">+0.0 MONTHS</div>
+            </div>
+          </article>
+          <article class="lever-card">
+            <div class="lever-card__meta">
+              <span class="lever-card__index">03</span>
+              <span>Impact</span>
+            </div>
+            <div class="lever-card__body">
+              <div class="lever-card__title">Lever loading</div>
+              <div class="lever-card__impact">+0.0 MONTHS</div>
+            </div>
+          </article>
+        </div>
+      </section>
+
+      <footer class="share-card__footer">
+        <span>monterun.io</span>
+        <strong>Math decides.</strong>
+      </footer>
+    </main>
+  </div>
+
+  <script type="application/json" id="mock-data">
+    {
+      "timestampIso": "2026-04-19T14:32:00+05:00",
+      "runway": {
+        "value": 3.7,
+        "unit": "months"
+      },
+      "survival12m": 0.28,
+      "verdict": "Twelve months remains fiction. Burn is still being mistaken for confidence.",
+      "heroNote": "Cold output from a deterministic Monte Carlo engine. The numbers are not trying to comfort you.",
+      "levers": [
+        {
+          "label": "Cut fixed burn before it becomes identity",
+          "impact": "+2.4 months"
+        },
+        {
+          "label": "Add contract revenue with immediate close probability",
+          "impact": "+1.6 months"
+        },
+        {
+          "label": "Delay the vanity hire and keep payroll breathable",
+          "impact": "+0.9 months"
+        }
+      ]
+    }
+  </script>
+
+  <script>
+    (function () {
+      var textNodes = {
+        timestamp: document.getElementById("card-timestamp"),
+        runwayValue: document.getElementById("runway-value"),
+        runwayUnit: document.getElementById("runway-unit"),
+        survivalValue: document.getElementById("survival-value"),
+        verdict: document.getElementById("verdict-text"),
+        heroNote: document.getElementById("hero-note"),
+        leverGrid: document.getElementById("lever-grid")
+      };
+
+      function readMockData() {
+        var source = document.getElementById("mock-data");
+        return JSON.parse(source.textContent);
+      }
+
+      function hasFiniteNumber(value) {
+        return typeof value === "number" && Number.isFinite(value);
+      }
+
+      function segmentText(value) {
+        if (typeof Intl !== "undefined" && typeof Intl.Segmenter === "function") {
+          var segmenter = new Intl.Segmenter("en", { granularity: "grapheme" });
+          return Array.from(segmenter.segment(value), function (item) {
+            return item.segment;
+          });
+        }
+
+        return Array.from(value);
+      }
+
+      function clampText(value, limit) {
+        var normalized = String(value || "").trim().replace(/\s+/g, " ");
+        if (!normalized) {
+          return "";
+        }
+
+        var glyphs = segmentText(normalized);
+        if (glyphs.length <= limit) {
+          return normalized;
+        }
+
+        return glyphs.slice(0, limit).join("").trimEnd() + "...";
+      }
+
+      function formatRunway(value) {
+        if (!hasFiniteNumber(value)) {
+          return "0.0";
+        }
+
+        return value.toFixed(value % 1 === 0 ? 0 : 1);
+      }
+
+      function formatUnit(unit) {
+        return clampText(String(unit || "months"), 12).toUpperCase();
+      }
+
+      function formatProbability(value) {
+        if (!hasFiniteNumber(value)) {
+          return "0%";
+        }
+
+        return Math.round(value * 100) + "%";
+      }
+
+      function formatTimestamp(iso) {
+        var normalized = String(iso || "").trim();
+        var match = normalized.match(
+          /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})(?::\d{2})?(Z|[+-]\d{2}:\d{2})$/
+        );
+
+        if (!match) {
+          return clampText(normalized || "UNKNOWN", 26);
+        }
+
+        var zone = match[6] === "Z"
+          ? "UTC"
+          : "UTC" + match[6].replace(":00", "").replace("+0", "+").replace("-0", "-");
+
+        return match[1] + "-" + match[2] + "-" + match[3] + " " + match[4] + ":" + match[5] + " " + zone;
+      }
+
+      function normalizeLevers(levers) {
+        if (!Array.isArray(levers)) {
+          throw new Error("Levers must be an array.");
+        }
+
+        if (levers.length !== 3) {
+          throw new Error("MonteRun share card requires exactly 3 levers.");
+        }
+
+        return levers.map(function (lever, index) {
+          return {
+            index: String(index + 1).padStart(2, "0"),
+            label: clampText(lever && lever.label, 54) || "No lever supplied",
+            impact: clampText(lever && lever.impact, 18) || "+0.0 MONTHS"
+          };
+        });
+      }
+
+      function validateData(data) {
+        if (!data || typeof data !== "object") {
+          throw new Error("Card data is required.");
+        }
+
+        if (!data.runway || !hasFiniteNumber(data.runway.value)) {
+          throw new Error("Runway value must be numeric.");
+        }
+
+        if (!hasFiniteNumber(data.survival12m)) {
+          throw new Error("Survival probability must be numeric.");
+        }
+
+        return {
+          timestampIso: String(data.timestampIso || ""),
+          runway: {
+            value: data.runway.value,
+            unit: String(data.runway.unit || "months")
+          },
+          survival12m: data.survival12m,
+          verdict: clampText(data.verdict, 92) || "Numbers remain unimpressed.",
+          heroNote: clampText(
+            data.heroNote || "Deterministic output. No theatrical optimism included.",
+            112
+          ),
+          levers: normalizeLevers(data.levers)
+        };
+      }
+
+      function renderLevers(levers) {
+        textNodes.leverGrid.textContent = "";
+
+        levers.forEach(function (lever) {
+          var card = document.createElement("article");
+          card.className = "lever-card";
+
+          var meta = document.createElement("div");
+          meta.className = "lever-card__meta";
+
+          var index = document.createElement("span");
+          index.className = "lever-card__index";
+          index.textContent = lever.index;
+
+          var tag = document.createElement("span");
+          tag.textContent = "Impact";
+
+          meta.appendChild(index);
+          meta.appendChild(tag);
+
+          var body = document.createElement("div");
+          body.className = "lever-card__body";
+
+          var title = document.createElement("div");
+          title.className = "lever-card__title";
+          title.textContent = lever.label;
+
+          var impact = document.createElement("div");
+          impact.className = "lever-card__impact";
+          impact.textContent = lever.impact.toUpperCase();
+
+          body.appendChild(title);
+          body.appendChild(impact);
+
+          card.appendChild(meta);
+          card.appendChild(body);
+          textNodes.leverGrid.appendChild(card);
+        });
+      }
+
+      function renderCard(data) {
+        var normalized = validateData(data);
+
+        textNodes.timestamp.textContent = formatTimestamp(normalized.timestampIso);
+        textNodes.runwayValue.textContent = formatRunway(normalized.runway.value);
+        textNodes.runwayUnit.textContent = formatUnit(normalized.runway.unit);
+        textNodes.survivalValue.textContent = formatProbability(normalized.survival12m);
+        textNodes.verdict.textContent = normalized.verdict;
+        textNodes.heroNote.textContent = normalized.heroNote;
+
+        renderLevers(normalized.levers);
+      }
+
+      window.renderCard = renderCard;
+
+      try {
+        renderCard(readMockData());
+      } catch (error) {
+        console.error(error);
+        renderCard({
+          timestampIso: "2026-04-19T00:00:00Z",
+          runway: { value: 0, unit: "months" },
+          survival12m: 0,
+          verdict: "Render failed. The math did not.",
+          heroNote: "Check the embedded JSON contract and try again.",
+          levers: [
+            { label: "Restore valid JSON input", impact: "+0.0 months" },
+            { label: "Keep exactly three levers in the payload", impact: "+0.0 months" },
+            { label: "Pass numeric runway and survival values", impact: "+0.0 months" }
+          ]
+        });
+      }
+    })();
+  </script>
+</body>
+</html>
