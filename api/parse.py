@@ -917,11 +917,19 @@ def _get_math_core():
 
 
 def _serialize_monte_run_params(params: Any) -> dict[str, float]:
+    cash = float(params.cash)
+    monthly_income = float(params.monthly_income)
+    fixed_expenses = float(params.fixed_expenses)
+    flexible_expenses = float(params.flexible_expenses)
+    monthly_burn = fixed_expenses + flexible_expenses
+
     return {
-        "cash": float(params.cash),
-        "monthly_income": float(params.monthly_income),
-        "fixed_expenses": float(params.fixed_expenses),
-        "flexible_expenses": float(params.flexible_expenses),
+        "cash": cash,
+        "monthly_income": monthly_income,
+        "fixed_expenses": fixed_expenses,
+        "flexible_expenses": flexible_expenses,
+        "initial_capital": cash,
+        "monthly_burn": monthly_burn,
     }
 
 
