@@ -180,7 +180,7 @@ def load_local_env_file(repo_root: Path) -> None:
 
 
 def load_autolog_config(repo_root: Path) -> dict[str, Any]:
-    config_path = repo_root / ".forkverse" / "obsidian-autolog.json"
+    config_path = repo_root / ".monterun" / "obsidian-autolog.json"
     if not config_path.exists():
         return {}
 

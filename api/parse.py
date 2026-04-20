@@ -104,7 +104,7 @@ EXTRACTION_SYSTEM_PROMPT: Final[str] = """
 - Если пользователь дал диапазон расходов, бери верхнюю границу.
 - fixed_expenses = обязательные повторяющиеся траты.
 - flexible_expenses = discretionary, variable, optional spend.
-- Не упоминай ForkVerse. Только MonteRun.
+- Не упоминай старый бренд. Только MonteRun.
 - Не добавляй markdown, объяснения, code fences, лишние ключи или текст вне JSON.
 """.strip()
 
@@ -127,7 +127,7 @@ ROAST_SYSTEM_PROMPT: Final[str] = """
 - Если сценарий плохой, говори жёстко и прямо.
 - Если levers слабые, высмеивай это.
 - Не используй markdown, списки, code fences и лишние поля.
-- Не упоминай ForkVerse. Только MonteRun.
+- Не упоминай старый бренд. Только MonteRun.
 """.strip()
 
 FIELD_QUESTIONS: Final[dict[str, str]] = {

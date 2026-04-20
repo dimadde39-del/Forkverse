@@ -301,7 +301,7 @@ def _render_simulation_png(simulation_data: Mapping[str, Any]) -> BytesIO:
     axis.axhline(0.0, color=BANKRUPTCY_COLOR, linewidth=1.8, linestyle="--", zorder=2)
 
     axis.grid(color=GRID_COLOR, alpha=0.12, linewidth=0.8)
-    axis.set_title("ForkVerse Monte Carlo", color=TEXT_COLOR, fontsize=15, pad=12)
+    axis.set_title("MonteRun Monte Carlo", color=TEXT_COLOR, fontsize=15, pad=12)
     axis.text(
         0.01,
         0.97,
@@ -458,7 +458,7 @@ def _send_telegram_photo(chat_id: int, png_buffer: BytesIO, caption: str) -> dic
             "parse_mode": "MarkdownV2",
         },
         files={
-            "photo": ("forkverse-runway.png", png_buffer, "image/png"),
+            "photo": ("monterun-runway.png", png_buffer, "image/png"),
         },
         timeout=TELEGRAM_TIMEOUT_SECONDS,
     )
@@ -493,7 +493,7 @@ def _send_telegram_photo(chat_id: int, png_buffer: BytesIO, caption: str) -> dic
 
 
 class handler(BaseHTTPRequestHandler):
-    server_version = "ForkVerse"
+    server_version = "MonteRun"
     sys_version = ""
 
     def do_POST(self) -> None:
