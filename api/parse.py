@@ -1131,6 +1131,16 @@ def _serialize_monte_run_params(params: Any) -> dict[str, float]:
     flexible_expenses = float(params.flexible_expenses)
     monthly_burn = fixed_expenses + flexible_expenses
 
+    def _legacy_int_attr(name: str, default: int) -> int:
+        value = getattr(params, name, None)
+        if value is None or isinstance(value, bool):
+            return default
+
+        try:
+            return int(value)
+        except (TypeError, ValueError):
+            return default
+
     return {
         "cash": cash,
         "monthly_income": monthly_income,
@@ -1138,6 +1148,9 @@ def _serialize_monte_run_params(params: Any) -> dict[str, float]:
         "flexible_expenses": flexible_expenses,
         "initial_capital": cash,
         "monthly_burn": monthly_burn,
+        "months": _legacy_int_attr("months", LEGACY_SIMULATION_MONTHS),
+        "n_simulations": _legacy_int_attr("n_simulations", LEGACY_SIMULATION_PATHS),
+        "income_delay_months": _legacy_int_attr("income_delay_months", 0),
     }
 
 
