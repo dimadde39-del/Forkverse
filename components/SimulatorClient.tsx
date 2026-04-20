@@ -65,6 +65,11 @@ type ParseNeedsClarification = {
 
 type ParseResponseData = ParseReady | ParseNeedsClarification;
 
+type SimulationLever = {
+  action: string;
+  impact_months: number;
+};
+
 type SimulationResponseData = {
   months: number[];
   n_simulations: number;
@@ -73,6 +78,11 @@ type SimulationResponseData = {
   p50: number[];
   p90: number[];
   spaghetti_sample: number[][];
+  base_runway_months: number | null;
+  survival_probability_12m: number | null;
+  verdict: string | null;
+  comment: string | null;
+  levers: SimulationLever[] | null;
 };
 
 type ClarificationContext = {
@@ -94,6 +104,21 @@ type MonteCarloChartPoint = {
 type CustomTooltipProps = {
   active?: boolean;
   payload?: Array<{ payload: MonteCarloChartPoint }>;
+};
+
+type ShareCardViewModel = {
+  timestampIso: string | null;
+  timestampLabel: string | null;
+  runwayValue: string;
+  survivalValue: string;
+  verdict: string;
+  comment: string;
+  levers: Array<{
+    reactKey: string;
+    indexLabel: string;
+    label: string;
+    impact: string;
+  }>;
 };
 
 const moneyFormatter = new Intl.NumberFormat("ru-RU", {
@@ -155,6 +180,46 @@ function normalizeMatrix(value: unknown, field: string): number[][] {
   return value as number[][];
 }
 
+function normalizeOptionalNumberField(value: unknown): number | null {
+  return isFiniteNumber(value) ? value : null;
+}
+
+function normalizeOptionalTextField(value: unknown): string | null {
+  if (typeof value !== "string") {
+    return null;
+  }
+
+  const trimmed = value.trim();
+  return trimmed.length > 0 ? trimmed : null;
+}
+
+function normalizeOptionalLevers(value: unknown): SimulationLever[] | null {
+  if (!Array.isArray(value)) {
+    return null;
+  }
+
+  const levers: SimulationLever[] = [];
+
+  for (const lever of value) {
+    if (!isRecord(lever)) {
+      continue;
+    }
+
+    const action = normalizeOptionalTextField(lever.action);
+    const impactMonths = normalizeOptionalNumberField(lever.impact_months);
+    if (!action || impactMonths === null) {
+      continue;
+    }
+
+    levers.push({
+      action,
+      impact_months: impactMonths,
+    });
+  }
+
+  return levers.length > 0 ? levers : null;
+}
+
 function createMessage(role: ChatMessage["role"], content: string): ChatMessage {
   return {
     id: globalThis.crypto.randomUUID(),
@@ -196,6 +261,57 @@ function formatAxisCurrency(value: number): string {
 
 function formatDelayMonths(value: number): string {
   return value > 0 ? `+${value}m` : "Live";
+}
+
+function clampText(value: string | null | undefined, limit: number): string {
+  const normalized = String(value ?? "")
+    .trim()
+    .replace(/\s+/g, " ");
+
+  if (!normalized) {
+    return "";
+  }
+
+  const glyphs = Array.from(normalized);
+  if (glyphs.length <= limit) {
+    return normalized;
+  }
+
+  return `${glyphs.slice(0, limit).join("").trimEnd()}...`;
+}
+
+function formatRunwayMonths(value: number): string {
+  const precision = Number.isInteger(value) ? 0 : 1;
+  return value.toFixed(precision);
+}
+
+function formatImpactMonths(value: number): string {
+  const precision = Number.isInteger(value) ? 0 : 1;
+  const sign = value > 0 ? "+" : "";
+  return `${sign}${value.toFixed(precision)} MONTHS`;
+}
+
+function formatShareProbability(value: number): string {
+  const clamped = clampPct(value);
+  const precision = Number.isInteger(clamped) ? 0 : 1;
+  return `${clamped.toFixed(precision)}%`;
+}
+
+function formatShareTimestamp(iso: string): string {
+  const normalized = iso.trim();
+  const parsed = new Date(normalized);
+
+  if (Number.isNaN(parsed.getTime())) {
+    return clampText(normalized || "UNKNOWN", 26);
+  }
+
+  const year = parsed.getUTCFullYear();
+  const month = String(parsed.getUTCMonth() + 1).padStart(2, "0");
+  const day = String(parsed.getUTCDate()).padStart(2, "0");
+  const hours = String(parsed.getUTCHours()).padStart(2, "0");
+  const minutes = String(parsed.getUTCMinutes()).padStart(2, "0");
+
+  return `${year}-${month}-${day} ${hours}:${minutes} UTC`;
 }
 
 function CustomTooltip({ active, payload }: CustomTooltipProps) {
@@ -323,6 +439,11 @@ function normalizeSimulationResponseData(value: unknown): SimulationResponseData
     p50: normalizeNumberArray(p50, "p50"),
     p90: normalizeNumberArray(p90, "p90"),
     spaghetti_sample: normalizeMatrix(spaghettiSample, "spaghetti_sample"),
+    base_runway_months: normalizeOptionalNumberField(value.base_runway_months),
+    survival_probability_12m: normalizeOptionalNumberField(value.survival_probability_12m),
+    verdict: normalizeOptionalTextField(value.verdict),
+    comment: normalizeOptionalTextField(value.comment),
+    levers: normalizeOptionalLevers(value.levers),
   };
 }
 
@@ -333,6 +454,7 @@ export default function SimulatorClient() {
   const [clarificationContext, setClarificationContext] = useState<ClarificationContext | null>(null);
   const [parseData, setParseData] = useState<ParseResponseData | null>(null);
   const [simulationData, setSimulationData] = useState<SimulationResponseData | null>(null);
+  const [simulationMeta, setSimulationMeta] = useState<ApiMeta | null>(null);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
   const rawSeriesKeys = useMemo(() => Array.from({ length: 50 }, (_, index) => `sim${index}` as SimKey), []);
@@ -428,6 +550,51 @@ export default function SimulatorClient() {
     };
   }, [chartData, simulationData]);
 
+  const shareCard = useMemo<ShareCardViewModel | null>(() => {
+    const baseRunwayMonths = simulationData?.base_runway_months;
+    const survivalProbability12m = simulationData?.survival_probability_12m;
+    const verdict = simulationData?.verdict;
+    const comment = simulationData?.comment;
+    const levers = simulationData?.levers;
+
+    if (
+      baseRunwayMonths === null ||
+      baseRunwayMonths === undefined ||
+      survivalProbability12m === null ||
+      survivalProbability12m === undefined ||
+      typeof verdict !== "string" ||
+      verdict.trim().length === 0 ||
+      typeof comment !== "string" ||
+      comment.trim().length === 0 ||
+      !Array.isArray(levers) ||
+      levers.length === 0
+    ) {
+      return null;
+    }
+
+    const timestampIso = normalizeOptionalTextField(simulationMeta?.generated_at);
+    const normalizedVerdict = clampText(verdict, 92);
+    const normalizedComment = clampText(comment, 112);
+    if (!normalizedVerdict || !normalizedComment) {
+      return null;
+    }
+
+    return {
+      timestampIso,
+      timestampLabel: timestampIso ? formatShareTimestamp(timestampIso) : null,
+      runwayValue: formatRunwayMonths(baseRunwayMonths),
+      survivalValue: formatShareProbability(survivalProbability12m),
+      verdict: normalizedVerdict,
+      comment: normalizedComment,
+      levers: levers.map((lever, index) => ({
+        reactKey: `${lever.action}:${lever.impact_months}`,
+        indexLabel: String(index + 1).padStart(2, "0"),
+        label: clampText(lever.action, 54),
+        impact: formatImpactMonths(lever.impact_months),
+      })),
+    };
+  }, [simulationData, simulationMeta?.generated_at]);
+
   const readyParams = parseData?.status === "ready" ? parseData.params : null;
   const isBusy = status === "parsing" || status === "simulating";
   const composerLabel = status === "clarifying" ? "Clarification" : "Scenario";
@@ -464,6 +631,7 @@ export default function SimulatorClient() {
     setParseData(null);
     if (!isClarificationReply) {
       setSimulationData(null);
+      setSimulationMeta(null);
     }
 
     setChatHistory((current) => [...current, createMessage("user", parseInput)]);
@@ -501,6 +669,7 @@ export default function SimulatorClient() {
 
       const normalizedSimulationData = normalizeSimulationResponseData(parseEnvelope.data);
       setSimulationData(normalizedSimulationData);
+      setSimulationMeta(parseEnvelope.meta);
       setChatHistory((current) => [
         ...current,
         createMessage(
@@ -810,6 +979,70 @@ export default function SimulatorClient() {
                         </ComposedChart>
                       </ResponsiveContainer>
                     </div>
+
+                    {shareCard ? (
+                      <article className="share-card" aria-label="MonteRun premium share card">
+                        <header className="share-card__header">
+                          <div className="share-card__brand">
+                            <span aria-hidden="true" className="share-card__brand-mark" />
+                            <span>MonteRun</span>
+                          </div>
+
+                          {shareCard.timestampIso && shareCard.timestampLabel ? (
+                            <time className="share-card__timestamp" dateTime={shareCard.timestampIso}>
+                              <span className="share-card__timestamp-badge">SIM</span>
+                              <span>{shareCard.timestampLabel}</span>
+                            </time>
+                          ) : null}
+                        </header>
+
+                        <section className="share-card__hero" aria-label="Runway and survival">
+                          <div className="share-card__runway-block">
+                            <div className="share-card__eyebrow">Simulation Result</div>
+                            <div className="share-card__runway">
+                              <div className="share-card__runway-value">{shareCard.runwayValue}</div>
+                              <div className="share-card__runway-unit">MONTHS</div>
+                            </div>
+                            <p className="share-card__hero-note">{shareCard.comment}</p>
+                          </div>
+
+                          <div className="share-card__metric">
+                            <div className="share-card__metric-row">
+                              <div className="share-card__metric-value">{shareCard.survivalValue}</div>
+                              <div className="share-card__metric-label">Survival Probability 12m</div>
+                            </div>
+                          </div>
+                        </section>
+
+                        <section className="share-card__verdict" aria-label="Verdict block">
+                          <div className="share-card__section-kicker">Verdict</div>
+                          <p className="share-card__verdict-text">{shareCard.verdict}</p>
+                        </section>
+
+                        <section className="share-card__levers" aria-label="Fastest ways to extend survival">
+                          <div className="share-card__section-kicker">Fastest ways to extend survival</div>
+                          <div className="share-card__lever-grid">
+                            {shareCard.levers.map((lever) => (
+                              <article key={lever.reactKey} className="lever-card">
+                                <div className="lever-card__meta">
+                                  <span className="lever-card__index">{lever.indexLabel}</span>
+                                  <span>Impact</span>
+                                </div>
+                                <div className="lever-card__body">
+                                  <div className="lever-card__title">{lever.label}</div>
+                                  <div className="lever-card__impact">{lever.impact}</div>
+                                </div>
+                              </article>
+                            ))}
+                          </div>
+                        </section>
+
+                        <footer className="share-card__footer">
+                          <span>monterun.io</span>
+                          <strong>Math decides.</strong>
+                        </footer>
+                      </article>
+                    ) : null}
                   </div>
                 </div>
               ) : (
@@ -822,6 +1055,440 @@ export default function SimulatorClient() {
             </div>
           </section>
         </div>
+
+        <style jsx>{`
+          .share-card {
+            --bg: #0a0a0a;
+            --surface-1: #101010;
+            --surface-2: #141414;
+            --surface-3: #171717;
+            --line: #222222;
+            --line-soft: rgba(255, 255, 255, 0.05);
+            --text-primary: #ffffff;
+            --text-secondary: #aaaaaa;
+            --text-muted: #666666;
+            --accent: #00ffaa;
+            --accent-soft: rgba(0, 255, 170, 0.12);
+            --accent-glow: rgba(0, 255, 170, 0.18);
+            position: relative;
+            isolation: isolate;
+            display: grid;
+            gap: 28px;
+            margin-top: 20px;
+            padding: 28px;
+            background:
+              linear-gradient(180deg, rgba(255, 255, 255, 0.025), rgba(255, 255, 255, 0.01)),
+              linear-gradient(160deg, rgba(255, 255, 255, 0.015), transparent 44%),
+              var(--surface-1);
+            border: 1px solid var(--line);
+            border-radius: 28px;
+            box-shadow: 0 24px 90px rgba(0, 0, 0, 0.65);
+            overflow: hidden;
+          }
+
+          .share-card::before {
+            content: "";
+            position: absolute;
+            inset: 0;
+            background:
+              linear-gradient(120deg, rgba(0, 255, 170, 0.06), transparent 26%),
+              radial-gradient(circle at top right, rgba(0, 255, 170, 0.1), transparent 30%),
+              linear-gradient(180deg, transparent, rgba(255, 255, 255, 0.02));
+            pointer-events: none;
+            z-index: -2;
+          }
+
+          .share-card::after {
+            content: "";
+            position: absolute;
+            inset: 0;
+            background-image:
+              linear-gradient(rgba(255, 255, 255, 0.02) 1px, transparent 1px),
+              linear-gradient(90deg, rgba(255, 255, 255, 0.02) 1px, transparent 1px);
+            background-size: 96px 96px;
+            mask-image: radial-gradient(circle at center, black 34%, transparent 100%);
+            opacity: 0.28;
+            pointer-events: none;
+            z-index: -1;
+          }
+
+          .share-card__header,
+          .share-card__footer {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 16px;
+          }
+
+          .share-card__header {
+            padding-bottom: 16px;
+            border-bottom: 1px solid var(--line-soft);
+          }
+
+          .share-card__brand {
+            display: inline-flex;
+            align-items: center;
+            gap: 12px;
+            font-size: 0.78rem;
+            font-weight: 650;
+            letter-spacing: 0.24em;
+            text-transform: uppercase;
+            color: var(--text-primary);
+          }
+
+          .share-card__brand-mark {
+            width: 11px;
+            height: 11px;
+            border-radius: 999px;
+            background:
+              radial-gradient(circle at 30% 30%, rgba(255, 255, 255, 0.85), transparent 30%),
+              var(--accent);
+            box-shadow:
+              0 0 0 1px rgba(0, 255, 170, 0.16),
+              0 0 24px var(--accent-glow);
+            flex: 0 0 auto;
+          }
+
+          .share-card__timestamp {
+            display: inline-flex;
+            align-items: center;
+            gap: 10px;
+            font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+            font-size: 0.76rem;
+            font-variant-numeric: tabular-nums;
+            letter-spacing: 0.08em;
+            text-transform: uppercase;
+            color: var(--text-secondary);
+            white-space: nowrap;
+          }
+
+          .share-card__timestamp-badge {
+            display: inline-block;
+            padding: 4px 8px;
+            border-radius: 999px;
+            border: 1px solid rgba(0, 255, 170, 0.16);
+            background: rgba(0, 255, 170, 0.05);
+            color: var(--accent);
+            letter-spacing: 0.16em;
+          }
+
+          .share-card__hero {
+            display: grid;
+            grid-template-columns: minmax(0, 1.45fr) minmax(240px, 0.95fr);
+            gap: 24px;
+            align-items: end;
+            padding: 6px 0 8px;
+          }
+
+          .share-card__runway-block {
+            display: flex;
+            flex-direction: column;
+            gap: 12px;
+            min-width: 0;
+          }
+
+          .share-card__eyebrow,
+          .share-card__section-kicker,
+          .share-card__metric-label {
+            font-size: 0.72rem;
+            letter-spacing: 0.22em;
+            text-transform: uppercase;
+            color: var(--text-secondary);
+          }
+
+          .share-card__runway {
+            display: flex;
+            align-items: flex-end;
+            gap: 14px;
+            min-width: 0;
+            line-height: 0.88;
+          }
+
+          .share-card__runway-value,
+          .share-card__metric-value,
+          .lever-card__meta,
+          .lever-card__impact {
+            font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+            font-variant-numeric: tabular-nums;
+          }
+
+          .share-card__runway-value {
+            min-width: 0;
+            font-size: clamp(4.6rem, 10.2vw, 8.4rem);
+            font-weight: 700;
+            letter-spacing: -0.08em;
+            color: var(--text-primary);
+            text-shadow: 0 0 42px rgba(255, 255, 255, 0.03);
+            white-space: nowrap;
+          }
+
+          .share-card__runway-unit {
+            transform: translateY(-0.46rem);
+            font-size: clamp(0.95rem, 1.8vw, 1.2rem);
+            letter-spacing: 0.26em;
+            text-transform: uppercase;
+            color: var(--accent);
+            white-space: nowrap;
+          }
+
+          .share-card__hero-note {
+            max-width: 28rem;
+            margin: 0;
+            font-size: 0.94rem;
+            line-height: 1.5;
+            color: var(--text-secondary);
+          }
+
+          .share-card__metric {
+            position: relative;
+            min-height: 100%;
+            padding: 22px;
+            border: 1px solid var(--line);
+            border-radius: 20px;
+            background:
+              linear-gradient(180deg, rgba(255, 255, 255, 0.025), transparent),
+              var(--surface-2);
+            display: flex;
+            flex-direction: column;
+            justify-content: flex-end;
+            gap: 14px;
+            overflow: hidden;
+          }
+
+          .share-card__metric::before {
+            content: "";
+            position: absolute;
+            inset: 0;
+            border-radius: inherit;
+            background: linear-gradient(180deg, rgba(0, 255, 170, 0.08), transparent 50%);
+            opacity: 0.5;
+            pointer-events: none;
+          }
+
+          .share-card__metric-row {
+            position: relative;
+            display: flex;
+            align-items: baseline;
+            justify-content: space-between;
+            gap: 12px;
+          }
+
+          .share-card__metric-value {
+            font-size: clamp(2.5rem, 5vw, 3.75rem);
+            font-weight: 700;
+            line-height: 0.95;
+            letter-spacing: -0.05em;
+            color: var(--accent);
+            text-shadow: 0 0 24px rgba(0, 255, 170, 0.1);
+          }
+
+          .share-card__metric-label {
+            max-width: 12ch;
+            text-align: right;
+            line-height: 1.5;
+          }
+
+          .share-card__verdict {
+            display: grid;
+            gap: 14px;
+            max-width: 58rem;
+            padding: 24px 24px 20px;
+            border: 1px solid var(--line);
+            border-radius: 18px;
+            background:
+              linear-gradient(180deg, rgba(255, 255, 255, 0.015), transparent 65%),
+              var(--surface-2);
+          }
+
+          .share-card__verdict-text {
+            margin: 0;
+            font-size: clamp(1.15rem, 2.1vw, 1.7rem);
+            line-height: 1.25;
+            font-weight: 540;
+            color: var(--text-primary);
+            max-width: 24ch;
+          }
+
+          .share-card__levers {
+            display: grid;
+            gap: 18px;
+            align-content: start;
+          }
+
+          .share-card__lever-grid {
+            display: grid;
+            grid-template-columns: repeat(3, minmax(0, 1fr));
+            gap: 16px;
+          }
+
+          .lever-card {
+            position: relative;
+            display: grid;
+            gap: 20px;
+            align-content: space-between;
+            min-height: 180px;
+            padding: 20px;
+            border: 1px solid var(--line);
+            border-radius: 18px;
+            background:
+              linear-gradient(180deg, rgba(255, 255, 255, 0.02), transparent 60%),
+              var(--surface-3);
+            overflow: hidden;
+          }
+
+          .lever-card::before {
+            content: "";
+            position: absolute;
+            inset: 0 auto auto 0;
+            width: 100%;
+            height: 1px;
+            background: linear-gradient(90deg, rgba(0, 255, 170, 0.45), transparent 55%);
+            opacity: 0.8;
+          }
+
+          .lever-card__meta {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 12px;
+            font-size: 0.72rem;
+            letter-spacing: 0.18em;
+            text-transform: uppercase;
+            color: var(--text-muted);
+          }
+
+          .lever-card__index {
+            color: var(--accent);
+          }
+
+          .lever-card__body {
+            display: grid;
+            gap: 12px;
+            min-width: 0;
+          }
+
+          .lever-card__title {
+            min-width: 0;
+            font-size: 1.03rem;
+            line-height: 1.35;
+            color: var(--text-primary);
+          }
+
+          .lever-card__impact {
+            display: inline-flex;
+            width: fit-content;
+            max-width: 100%;
+            padding: 8px 10px;
+            border-radius: 999px;
+            border: 1px solid rgba(0, 255, 170, 0.14);
+            background: var(--accent-soft);
+            font-size: 0.83rem;
+            letter-spacing: 0.12em;
+            text-transform: uppercase;
+            color: var(--accent);
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+          }
+
+          .share-card__footer {
+            margin-top: auto;
+            padding-top: 18px;
+            border-top: 1px solid var(--line-soft);
+            color: var(--text-muted);
+            font-size: 0.78rem;
+            letter-spacing: 0.16em;
+            text-transform: uppercase;
+          }
+
+          .share-card__footer strong {
+            color: var(--text-secondary);
+            font-weight: 600;
+          }
+
+          @media (max-width: 920px) {
+            .share-card {
+              gap: 24px;
+              padding: 24px;
+            }
+
+            .share-card__hero {
+              grid-template-columns: 1fr;
+            }
+
+            .share-card__metric {
+              min-height: 180px;
+            }
+
+            .share-card__lever-grid {
+              grid-template-columns: 1fr;
+            }
+
+            .lever-card {
+              min-height: 148px;
+            }
+
+            .share-card__verdict-text {
+              max-width: none;
+            }
+          }
+
+          @media (max-width: 640px) {
+            .share-card {
+              gap: 20px;
+              padding: 18px;
+              border-radius: 22px;
+            }
+
+            .share-card__header,
+            .share-card__footer {
+              align-items: flex-start;
+              flex-direction: column;
+            }
+
+            .share-card__header {
+              padding-bottom: 12px;
+            }
+
+            .share-card__runway {
+              gap: 10px;
+              align-items: baseline;
+            }
+
+            .share-card__runway-value {
+              font-size: clamp(3.5rem, 16vw, 5.4rem);
+            }
+
+            .share-card__runway-unit {
+              transform: none;
+              font-size: 0.84rem;
+              letter-spacing: 0.18em;
+            }
+
+            .share-card__metric {
+              padding: 18px;
+              min-height: 150px;
+            }
+
+            .share-card__metric-value {
+              font-size: clamp(2rem, 11vw, 3rem);
+            }
+
+            .share-card__verdict {
+              padding: 18px;
+            }
+
+            .share-card__verdict-text {
+              font-size: 1.08rem;
+              line-height: 1.3;
+            }
+
+            .lever-card {
+              padding: 18px;
+              min-height: 138px;
+            }
+          }
+        `}</style>
       </div>
     </div>
   );
