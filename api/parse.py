@@ -1268,15 +1268,7 @@ def _run_math_core(params: Any) -> dict[str, Any]:
             n_simulations=LEGACY_SIMULATION_PATHS,
         )
         chart_data = compute_metrics(paths)
-        raw_result.update(
-            {
-                "months": chart_data["months"],
-                "p10": chart_data["p10"],
-                "p50": chart_data["p50"],
-                "p90": chart_data["p90"],
-                "spaghetti_sample": chart_data["spaghetti_sample"],
-            }
-        )
+        raw_result.update(chart_data)
     except Exception as exc:
         LOGGER.exception("MonteRun simulation failed")
         raise ApiProblem(
