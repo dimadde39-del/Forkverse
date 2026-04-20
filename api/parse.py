@@ -1248,7 +1248,7 @@ def _normalize_simulation_result(raw_result: Any) -> dict[str, Any]:
         "levers": normalized_levers,
     }
 
-    for field in ("months", "p10", "p50", "p90", "spaghetti_sample"):
+    for field in ("months", "p10", "p50", "p90", "spaghetti_sample", "n_simulations"):
         if field in raw_result:
             result[field] = raw_result[field]
 
