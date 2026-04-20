@@ -212,9 +212,20 @@ def _extract_first_name(message: Mapping[str, Any]) -> str | None:
 def _process_parse_flow(user_text: str, telegram_user_id: int, request_id: str) -> tuple[dict[str, Any], dict[str, Any] | None, list[list[float]] | None]:
     parser_context_payload, telegram_context_row, scenario_state_row = parse_api._load_telegram_parser_context(telegram_user_id)
     parser_input = parse_api._build_parser_input(user_text, parser_context_payload)
-    parsed = parse_api._call_groq(parser_input)
+    parsed = parse_api._call_groq(
+        parser_input,
+        base_params=parse_api._extract_base_params_snapshot(parser_context_payload),
+    )
 
     if parsed.get("status") != "ready":
+        parse_api._persist_last_bot_question(
+            telegram_user_id=telegram_user_id,
+            request_id=request_id,
+            source_text=user_text,
+            question=parsed.get("question") if isinstance(parsed, Mapping) else None,
+            telegram_context_row=telegram_context_row,
+            scenario_state_row=scenario_state_row,
+        )
         return parsed, None, None
 
     params = parsed.get("params")
