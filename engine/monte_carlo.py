@@ -8,7 +8,8 @@ import numpy as np
 
 SIMULATION_PATHS: Final[int] = 1_000
 SIMULATION_MONTHS: Final[int] = 24
-NOISE_BAND: Final[float] = 0.10
+INCOME_NOISE_STD: Final[float] = 0.14
+FLEXIBLE_EXPENSES_NOISE_STD: Final[float] = 0.24
 DEFAULT_SEED: Final[int] = 20_260_418
 
 LEGACY_DEFAULT_MONTHS: Final[int] = 6
@@ -77,11 +78,15 @@ def _validate_params(params: MonteRunParams) -> MonteRunParams:
 
 def _generate_noise(seed: int, n_paths: int, months: int) -> tuple[np.ndarray, np.ndarray]:
     rng = np.random.default_rng(seed)
-    low = 1.0 - NOISE_BAND
-    high = 1.0 + NOISE_BAND
-
-    income_noise = rng.uniform(low, high, size=(n_paths, months)).astype(np.float64)
-    flexible_noise = rng.uniform(low, high, size=(n_paths, months)).astype(np.float64)
+    # Clamp multiplicative shocks at zero so noisy months do not flip cashflow signs.
+    income_noise = np.maximum(
+        rng.normal(loc=1.0, scale=INCOME_NOISE_STD, size=(n_paths, months)),
+        0.0,
+    ).astype(np.float64)
+    flexible_noise = np.maximum(
+        rng.normal(loc=1.0, scale=FLEXIBLE_EXPENSES_NOISE_STD, size=(n_paths, months)),
+        0.0,
+    ).astype(np.float64)
 
     return income_noise, flexible_noise
 

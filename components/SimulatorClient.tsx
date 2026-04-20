@@ -90,6 +90,16 @@ type ClarificationContext = {
   question: string;
 };
 
+type SimulatorViewState = {
+  status: FlowStatus;
+  chatHistory: ChatMessage[];
+  clarificationContext: ClarificationContext | null;
+  parseData: ParseResponseData | null;
+  simulationData: SimulationResponseData | null;
+  simulationMeta: ApiMeta | null;
+  errorMessage: string | null;
+};
+
 type SimKey = `sim${number}`;
 
 type MonteCarloChartPoint = {
@@ -447,15 +457,21 @@ function normalizeSimulationResponseData(value: unknown): SimulationResponseData
   };
 }
 
+const initialViewState: SimulatorViewState = {
+  status: "idle",
+  chatHistory: [],
+  clarificationContext: null,
+  parseData: null,
+  simulationData: null,
+  simulationMeta: null,
+  errorMessage: null,
+};
+
 export default function SimulatorClient() {
-  const [status, setStatus] = useState<FlowStatus>("idle");
   const [draft, setDraft] = useState("");
-  const [chatHistory, setChatHistory] = useState<ChatMessage[]>([]);
-  const [clarificationContext, setClarificationContext] = useState<ClarificationContext | null>(null);
-  const [parseData, setParseData] = useState<ParseResponseData | null>(null);
-  const [simulationData, setSimulationData] = useState<SimulationResponseData | null>(null);
-  const [simulationMeta, setSimulationMeta] = useState<ApiMeta | null>(null);
-  const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const [viewState, setViewState] = useState<SimulatorViewState>(initialViewState);
+  const { status, chatHistory, clarificationContext, parseData, simulationData, simulationMeta, errorMessage } =
+    viewState;
 
   const rawSeriesKeys = useMemo(() => Array.from({ length: 50 }, (_, index) => `sim${index}` as SimKey), []);
 
@@ -625,17 +641,18 @@ export default function SimulatorClient() {
       ? `План: ${clarificationContext.plan}. Вопрос: ${clarificationContext.question}. Ответ: ${trimmedDraft}`
       : trimmedDraft;
     const fallbackStatus: FlowStatus = isClarificationReply ? "clarifying" : simulationData ? "simulated" : "idle";
+    const userMessage = createMessage("user", parseInput);
 
     setDraft("");
-    setErrorMessage(null);
-    setParseData(null);
-    if (!isClarificationReply) {
-      setSimulationData(null);
-      setSimulationMeta(null);
-    }
-
-    setChatHistory((current) => [...current, createMessage("user", parseInput)]);
-    setStatus("parsing");
+    setViewState((current) => ({
+      ...current,
+      status: "parsing",
+      errorMessage: null,
+      parseData: null,
+      simulationData: isClarificationReply ? current.simulationData : null,
+      simulationMeta: isClarificationReply ? current.simulationMeta : null,
+      chatHistory: [...current.chatHistory, userMessage],
+    }));
 
     try {
       const parseEnvelope = await postEnvelope<unknown>("/api/parse", { text: parseInput });
@@ -644,46 +661,54 @@ export default function SimulatorClient() {
       }
 
       const normalizedParseData = normalizeParseResponseData(parseEnvelope.data);
-      setParseData(normalizedParseData);
 
       if (normalizedParseData.status === "needs_clarification") {
-        setClarificationContext({
-          plan: planText,
-          question: normalizedParseData.question,
-        });
-        setChatHistory((current) => [...current, createMessage("ai", normalizedParseData.question)]);
-        setStatus("clarifying");
+        const clarificationMessage = createMessage("ai", normalizedParseData.question);
+
+        setViewState((current) => ({
+          ...current,
+          status: "clarifying",
+          clarificationContext: {
+            plan: planText,
+            question: normalizedParseData.question,
+          },
+          parseData: normalizedParseData,
+          chatHistory: [...current.chatHistory, clarificationMessage],
+        }));
         return;
       }
 
-      setChatHistory((current) => [
-        ...current,
-        createMessage(
-          "ai",
-          `PARSER READY | CAPITAL ${normalizedParseData.params.initial_capital} | BURN ${normalizedParseData.params.monthly_burn} | INCOME ${normalizedParseData.params.monthly_income} | DELAY ${normalizedParseData.params.income_delay_months}M`,
-        ),
-      ]);
-
-      setClarificationContext(null);
-      setStatus("simulating");
-
       const normalizedSimulationData = normalizeSimulationResponseData(parseEnvelope.data);
-      setSimulationData(normalizedSimulationData);
-      setSimulationMeta(parseEnvelope.meta);
-      setChatHistory((current) => [
+      const parserReadyMessage = createMessage(
+        "ai",
+        `PARSER READY | CAPITAL ${normalizedParseData.params.initial_capital} | BURN ${normalizedParseData.params.monthly_burn} | INCOME ${normalizedParseData.params.monthly_income} | DELAY ${normalizedParseData.params.income_delay_months}M`,
+      );
+      const simulationCompleteMessage = createMessage(
+        "ai",
+        `SIMULATION COMPLETE | SURVIVAL ${(normalizedSimulationData.survival_probability * 100).toFixed(1)}%`,
+      );
+
+      setViewState((current) => ({
         ...current,
-        createMessage(
-          "ai",
-          `SIMULATION COMPLETE | SURVIVAL ${(normalizedSimulationData.survival_probability * 100).toFixed(1)}%`,
-        ),
-      ]);
-      setStatus("simulated");
+        status: "simulated",
+        clarificationContext: null,
+        parseData: normalizedParseData,
+        simulationData: normalizedSimulationData,
+        simulationMeta: parseEnvelope.meta,
+        errorMessage: null,
+        chatHistory: [...current.chatHistory, parserReadyMessage, simulationCompleteMessage],
+      }));
     } catch (err) {
       console.error("[SimClient] LLM parse error:", err);
       const errorMsg = err instanceof Error ? err.message : JSON.stringify(err, null, 2) ?? String(err);
-      setErrorMessage(errorMsg);
-      setChatHistory((current) => [...current, createMessage("ai", `ERROR | ${errorMsg}`)]);
-      setStatus(fallbackStatus);
+      const errorChatMessage = createMessage("ai", `ERROR | ${errorMsg}`);
+
+      setViewState((current) => ({
+        ...current,
+        status: fallbackStatus,
+        errorMessage: errorMsg,
+        chatHistory: [...current.chatHistory, errorChatMessage],
+      }));
     }
   }
 
