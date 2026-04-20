@@ -1012,7 +1012,7 @@ def _normalize_simulation_result(raw_result: Any) -> dict[str, Any]:
 
     normalized_levers.sort(key=lambda item: (-float(item["impact_months"]), str(item["action"])))
 
-    return {
+    result = {
         "base_runway_months": _coerce_non_negative_float(
             "base_runway_months",
             raw_result.get("base_runway_months"),
@@ -1027,12 +1027,35 @@ def _normalize_simulation_result(raw_result: Any) -> dict[str, Any]:
         "levers": normalized_levers,
     }
 
+    for field in ("months", "p10", "p50", "p90", "spaghetti_sample"):
+        if field in raw_result:
+            result[field] = raw_result[field]
+
+    return result
+
 
 def _run_math_core(params: Any) -> dict[str, Any]:
-    _, run_simulation, _, _ = _get_math_core()
+    _, run_simulation, simulate, compute_metrics = _get_math_core()
 
     try:
         raw_result = run_simulation(params)
+        paths = simulate(
+            initial_capital=params.cash,
+            monthly_income=params.monthly_income,
+            monthly_burn=params.fixed_expenses + params.flexible_expenses,
+            months=LEGACY_SIMULATION_MONTHS,
+            n_simulations=LEGACY_SIMULATION_PATHS,
+        )
+        chart_data = compute_metrics(paths)
+        raw_result.update(
+            {
+                "months": chart_data["months"],
+                "p10": chart_data["p10"],
+                "p50": chart_data["p50"],
+                "p90": chart_data["p90"],
+                "spaghetti_sample": chart_data["spaghetti_sample"],
+            }
+        )
     except Exception as exc:
         LOGGER.exception("MonteRun simulation failed")
         raise ApiProblem(
