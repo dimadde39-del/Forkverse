@@ -1,5 +1,5 @@
 name: data-visualization
-description: Spaghetti graph + percentile bands + fork summary. Самый важный UI-элемент ForkVerse. Recharts. Никаких компромиссов с математикой.
+description: Spaghetti graph + percentile bands + fork summary. Самый важный UI-элемент MonteRun. Recharts. Никаких компромиссов с математикой.
 
 ## Rule 0: Никогда не искажай математический смысл
 Это не «красивая визуализация». Это приговор.
@@ -62,3 +62,4 @@ Definition of done
 - Tooltip usable на мобильных
 - Отрицательная зона видна
 - p10 ≤ p50 ≤ p90 в каждой точке
+

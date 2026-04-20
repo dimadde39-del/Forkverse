@@ -1,9 +1,9 @@
 # Vercel Telegram Webhook
 
-Backlinks: [[ForkVerse MOC]] · [[01-Projects/ForkVerse/Current-Status]] · [[03-Resources/Architecture/Parser-and-Simulation-Flow]] · [[Daily Notes/2026-04-12]]
+Backlinks: [[MonteRun MOC]] · [[01-Projects/MonteRun/Current-Status]] · [[03-Resources/Architecture/Parser-and-Simulation-Flow]] · [[Daily Notes/2026-04-12]]
 
 ## Purpose
-Production-ready Telegram webhook for ForkVerse on Vercel Python runtime.
+Production-ready Telegram webhook for MonteRun on Vercel Python runtime.
 
 ## Responsibilities
 - Accept Telegram webhook updates in `api/tg_webhook.py`
@@ -13,13 +13,13 @@ Production-ready Telegram webhook for ForkVerse on Vercel Python runtime.
 - Leave an audit trail in [[Daily Notes/2026-04-12]] and future AutoLogger traces
 
 ## Runtime Notes
-- Uses the Vercel Python serverless `handler` class pattern already used in ForkVerse APIs
+- Uses the Vercel Python serverless `handler` class pattern already used in MonteRun APIs
 - Reads `TELEGRAM_BOT_TOKEN` only from environment
 - Uses `telegram_context` and `scenario_state` as the state bridge into parsing and simulation
 
 ## Related Notes
-- [[ForkVerse MOC]]
-- [[01-Projects/ForkVerse/Current-Status]]
+- [[MonteRun MOC]]
+- [[01-Projects/MonteRun/Current-Status]]
 - [[03-Resources/Architecture/Parser-and-Simulation-Flow]]
 - [[03-Resources/Simulations/Monte-Carlo-Engine]]
 - [[Daily Notes/2026-04-12]]

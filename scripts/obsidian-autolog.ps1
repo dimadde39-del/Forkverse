@@ -50,7 +50,7 @@ function Ensure-DailyNote {
 - 
 
 ## Links
-- [[ForkVerse MOC]]
+- [[MonteRun MOC]]
 
 ## Backlinks / Related Notes
 - 
@@ -88,14 +88,21 @@ function Add-LineUnderHeading {
 }
 
 $repoRoot = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
-$configPath = Join-Path $repoRoot ".forkverse\obsidian-autolog.json"
+$configPath = Join-Path $repoRoot ".monterun\obsidian-autolog.json"
 
 if (-not (Test-Path -LiteralPath $configPath)) {
     throw "AutoLogger config not found: $configPath"
 }
 
 $config = Get-Content -LiteralPath $configPath -Raw -Encoding UTF8 | ConvertFrom-Json
-$vaultPath = $config.vaultPath
+$vaultPathValue = [string]$config.vaultPath
+if ([string]::IsNullOrWhiteSpace($vaultPathValue)) {
+    $vaultPath = Join-Path $repoRoot "Obsidian"
+} elseif ([System.IO.Path]::IsPathRooted($vaultPathValue)) {
+    $vaultPath = $vaultPathValue
+} else {
+    $vaultPath = [System.IO.Path]::GetFullPath((Join-Path $repoRoot $vaultPathValue))
+}
 
 $shortSha = (& git -C $repoRoot rev-parse --short HEAD).Trim()
 $fullSha = (& git -C $repoRoot rev-parse HEAD).Trim()
@@ -121,8 +128,17 @@ New-Item -ItemType Directory -Force -Path $gitLogDayFolder | Out-Null
 $noteStem = "$timeLabel-$shortSha-$slug"
 $notePath = Join-Path $gitLogDayFolder "$noteStem.md"
 $dailyLink = "[[Daily Notes/$dateLabel]]"
-$hubLink = "[[ForkVerse MOC]]"
-$statusLink = "[[01-Projects/ForkVerse/Current-Status]]"
+$projectHub = [string]$config.projectHub
+if ([string]::IsNullOrWhiteSpace($projectHub)) {
+    $projectHub = "MonteRun MOC"
+}
+
+$projectStatus = [string]$config.projectStatus
+if ([string]::IsNullOrWhiteSpace($projectStatus)) {
+    $projectStatus = "01-Projects/MonteRun/Current-Status"
+}
+$hubLink = "[[$projectHub]]"
+$statusLink = "[[$projectStatus]]"
 $noteLink = "[[00-Inbox/Git Log/$dateLabel/$noteStem]]"
 
 if (-not (Test-Path -LiteralPath $notePath)) {

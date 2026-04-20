@@ -1,8 +1,8 @@
 # Git Commit Log
 
 Daily: [[Daily Notes/{{date}}]]
-Project: [[ForkVerse MOC]]
-Status: [[01-Projects/ForkVerse/Current-Status]]
+Project: [[MonteRun MOC]]
+Status: [[01-Projects/MonteRun/Current-Status]]
 
 ## Commit
 - SHA: `{{sha}}`

@@ -1,9 +1,9 @@
-# ForkVerse MOC
+# MonteRun MOC
 
-> Главный вход в Second Brain проекта ForkVerse. Эта заметка связывает Projects, Areas, Resources, Daily Notes, Templates и архивный след в одну навигационную карту.
+> Главный вход в Second Brain проекта MonteRun. Эта заметка связывает Projects, Areas, Resources, Daily Notes, Templates и архивный след в одну навигационную карту.
 
 ## PARA Hub
-- Projects: [[01-Projects/ForkVerse/Current-Status]]
+- Projects: [[01-Projects/MonteRun/Current-Status]]
 - Areas: [[02-Areas/MOC]]
 - Resources: [[03-Resources/MOC]]
 - Archives: [[04-Archives/MOC]]
@@ -16,7 +16,7 @@
 - Latest knowledge log: [[00-Inbox/Git Log/2026-04-12/120000-second-brain-setup]]
 
 ## Project Map
-- Active status: [[01-Projects/ForkVerse/Current-Status]]
+- Active status: [[01-Projects/MonteRun/Current-Status]]
 - Architecture chain: [[03-Resources/Architecture/Parser-and-Simulation-Flow]]
 - Simulation model: [[03-Resources/Simulations/Monte-Carlo-Engine]]
 - Design bar: [[03-Resources/Design/emil-design-eng]]
@@ -25,7 +25,7 @@
 ## Graph View Seed
 ```mermaid
 graph TD
-    HUB["ForkVerse MOC"] --> PROJECTS["01 Projects"]
+    HUB["MonteRun MOC"] --> PROJECTS["01 Projects"]
     HUB --> AREAS["02 Areas"]
     HUB --> RESOURCES["03 Resources"]
     HUB --> DAILY["Daily Notes/2026-04-12"]

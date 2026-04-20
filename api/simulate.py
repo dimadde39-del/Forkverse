@@ -66,7 +66,7 @@ def _build_error(
 
 
 class handler(BaseHTTPRequestHandler):
-    server_version = "ForkVerse"
+    server_version = "MonteRun"
     sys_version = ""
 
     def do_POST(self) -> None:
@@ -303,3 +303,4 @@ class handler(BaseHTTPRequestHandler):
         self.send_header("X-Server-Timing", f"total;dur={elapsed_ms}")
         self.end_headers()
         self.wfile.write(response_bytes)
+

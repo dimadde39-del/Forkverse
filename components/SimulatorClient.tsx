@@ -529,7 +529,7 @@ export default function SimulatorClient() {
           <div className="relative flex flex-col gap-6 xl:flex-row xl:items-end xl:justify-between">
             <div className="max-w-3xl">
               <div className="inline-flex items-center rounded-full border border-white/10 bg-white/6 px-3 py-1 text-[11px] uppercase tracking-[0.24em] text-emerald-300/90">
-                ForkVerse Monte Carlo
+                MonteRun Analytics
               </div>
               <h1 className="mt-4 text-3xl font-semibold tracking-[-0.04em] text-white sm:text-[2.6rem]">
                 Cash runway intelligence with delayed-income modeling
@@ -826,3 +826,4 @@ export default function SimulatorClient() {
     </div>
   );
 }
+

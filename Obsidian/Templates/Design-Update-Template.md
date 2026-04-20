@@ -1,6 +1,6 @@
 # Design Update
 
-Backlinks: [[ForkVerse MOC]] · [[03-Resources/Design/emil-design-eng]] · [[01-Projects/ForkVerse/Current-Status]]
+Backlinks: [[MonteRun MOC]] · [[03-Resources/Design/emil-design-eng]] · [[01-Projects/MonteRun/Current-Status]]
 
 ## Summary
 - 
@@ -22,4 +22,4 @@ Backlinks: [[ForkVerse MOC]] · [[03-Resources/Design/emil-design-eng]] · [[01-
 
 ## Related Notes
 - [[03-Resources/Design/emil-design-eng]]
-- [[01-Projects/ForkVerse/Current-Status]]
+- [[01-Projects/MonteRun/Current-Status]]

@@ -1,9 +1,9 @@
 # Monte-Carlo-Engine
 
-Backlinks: [[ForkVerse MOC]] · [[01-Projects/ForkVerse/Current-Status]] · [[03-Resources/Architecture/Parser-and-Simulation-Flow]] · [[03-Resources/MOC]]
+Backlinks: [[MonteRun MOC]] · [[01-Projects/MonteRun/Current-Status]] · [[03-Resources/Architecture/Parser-and-Simulation-Flow]] · [[03-Resources/MOC]]
 
 ## Purpose
-Эта заметка фиксирует, как ForkVerse считает runway после парсинга сценария.
+Эта заметка фиксирует, как MonteRun считает runway после парсинга сценария.
 
 ## Key Behaviors
 - `income_delay_months` обнуляет monthly income на первых N месяцах.
@@ -25,7 +25,7 @@ flowchart LR
 ```
 
 ## Connected Context
-- Project overview: [[ForkVerse MOC]]
-- Current state: [[01-Projects/ForkVerse/Current-Status]]
+- Project overview: [[MonteRun MOC]]
+- Current state: [[01-Projects/MonteRun/Current-Status]]
 - API contract path: [[03-Resources/Architecture/Parser-and-Simulation-Flow]]
 - Design context: [[03-Resources/Design/emil-design-eng]]
