@@ -1,4 +1,3 @@
-httpx
 numpy
 openai
 supabase

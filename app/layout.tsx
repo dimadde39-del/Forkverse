@@ -11,7 +11,7 @@ const inter = Inter({
 });
 
 export const metadata: Metadata = {
-  title: "Fork Zero",
+  title: "MonteRun",
   description: "MonteRun Analytics Monte Carlo surface",
 };
 

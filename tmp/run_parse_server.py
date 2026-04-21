@@ -1,5 +1,8 @@
 ﻿import sys
-sys.path.insert(0, r"C:\ForkVerse")
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT))
 from http.server import HTTPServer
 from api.parse import handler
 server = HTTPServer(("127.0.0.1", 8124), handler)

@@ -209,7 +209,7 @@ def _extract_first_name(message: Mapping[str, Any]) -> str | None:
     return first_name.strip() if isinstance(first_name, str) and first_name.strip() else None
 
 
-def _process_parse_flow(user_text: str, telegram_user_id: int, request_id: str) -> tuple[dict[str, Any], dict[str, Any] | None, list[list[float]] | None]:
+def _process_parse_flow(user_text: str, telegram_user_id: int, request_id: str) -> tuple[dict[str, Any], dict[str, Any] | None]:
     parser_context_payload, telegram_context_row, scenario_state_row = parse_api._load_telegram_parser_context(telegram_user_id)
     parser_input = parse_api._build_parser_input(user_text, parser_context_payload)
     parsed = parse_api._call_groq(
@@ -226,7 +226,7 @@ def _process_parse_flow(user_text: str, telegram_user_id: int, request_id: str) 
             telegram_context_row=telegram_context_row,
             scenario_state_row=scenario_state_row,
         )
-        return parsed, None, None
+        return parsed, None
 
     params = parsed.get("params")
     if not isinstance(params, Mapping):
@@ -256,7 +256,7 @@ def _process_parse_flow(user_text: str, telegram_user_id: int, request_id: str) 
         scenario_state_row=scenario_state_row,
     )
 
-    return parsed, simulation_data, trajectories
+    return parsed, simulation_data
 
 
 def _render_simulation_png(simulation_data: Mapping[str, Any]) -> BytesIO:
@@ -509,7 +509,7 @@ class handler(BaseHTTPRequestHandler):
             telegram_user_id = _extract_telegram_user_id(message)
             first_name = _extract_first_name(message)
 
-            parsed, simulation_data, _trajectories = _process_parse_flow(user_text, telegram_user_id, request_id)
+            parsed, simulation_data = _process_parse_flow(user_text, telegram_user_id, request_id)
             print(json.dumps(parsed, ensure_ascii=False, sort_keys=True), flush=True)
             comment = _extract_parser_text(parsed, "comment")
             if parsed["status"] == "ready" and simulation_data is not None:
