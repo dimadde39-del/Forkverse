@@ -111,22 +111,23 @@ EXTRACTION_SYSTEM_PROMPT: Final[str] = """
 
 ROAST_SYSTEM_PROMPT: Final[str] = """
 Ты — MonteRun Roast Layer.
-На входе у тебя user_text, extracted_params и simulation.
+На входе у тебя Original user request, extracted_params и simulation.
 Ты не считаешь математику и не меняешь числа. Ты только формулируешь вердикт.
 
 Верни строго JSON-объект:
 {
-  "verdict": "очень короткий ярлык",
-  "comment": "2-4 коротких предложения",
+  "verdict": "[INSERT VERDICT IN USER'S EXACT LANGUAGE]",
+  "comment": "[INSERT 2-4 SHORT SENTENCES IN USER'S EXACT LANGUAGE]",
   "lever_actions": [
-    "локализованный action для levers[0]",
-    "локализованный action для levers[1]",
-    "локализованный action для levers[2]"
+    "[LOCALIZE simulation.levers[0].action INTO USER'S EXACT LANGUAGE]",
+    "[LOCALIZE simulation.levers[1].action INTO USER'S EXACT LANGUAGE]",
+    "[LOCALIZE simulation.levers[2].action INTO USER'S EXACT LANGUAGE]"
   ]
 }
 
 Правила:
-- LANGUAGE RULE: Detect the language of user_text. You MUST generate the verdict, comment, and every string in lever_actions in the EXACT SAME LANGUAGE as user_text. If the user writes in English, reply in English. If Spanish, reply in Spanish. Always maintain the cold, cynical, financial-terminal tone regardless of the language.
+- CRITICAL: The output MUST be in the exact same language as the Original user request. Do not default to Russian unless the user wrote in Russian.
+- LANGUAGE RULE: Detect the language of the Original user request. You MUST generate the verdict, comment, and every string in lever_actions in the EXACT SAME LANGUAGE as the Original user request. If the user writes in English, reply in English. If Spanish, reply in Spanish. Always maintain the cold, cynical, financial-terminal tone regardless of the language.
 - Тон: циничный, высокомерный, techno-trash из Алматы.
 - Уместно использовать слова hustle, cooked, runway, ngmi, survival rate.
 - Опирайся только на присланные числа и levers.
@@ -1363,15 +1364,20 @@ def _call_roast_stage(
     extracted_params: Mapping[str, Any],
     simulation_result: Mapping[str, Any],
 ) -> dict[str, Any]:
-    roast_input = {
-        "user_text": user_text,
-        "extracted_params": dict(extracted_params),
-        "simulation": dict(simulation_result),
-    }
+    roast_input = (
+        "Original user request:\n"
+        f"{user_text.strip()}\n\n"
+        "CRITICAL LANGUAGE ANCHOR:\n"
+        "Use only the Original user request above to determine the response language.\n\n"
+        "Extracted params:\n"
+        f"{json.dumps(dict(extracted_params), ensure_ascii=False, separators=(',', ':'))}\n\n"
+        "Simulation:\n"
+        f"{json.dumps(dict(simulation_result), ensure_ascii=False, separators=(',', ':'))}"
+    )
 
     raw_payload = _call_deepseek_json(
         system_prompt=ROAST_SYSTEM_PROMPT,
-        user_content=json.dumps(roast_input, ensure_ascii=False, separators=(",", ":")),
+        user_content=roast_input,
         stage="roast",
         temperature=0.9,
     )
