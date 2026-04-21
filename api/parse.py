@@ -98,6 +98,7 @@ EXTRACTION_SYSTEM_PROMPT: Final[str] = """
 Правила:
 - Используй BASE_CONTEXT_JSON как доверенную память, если он передан.
 - Если в USER_MESSAGE есть явное новое число, оно важнее контекста.
+- LANGUAGE RULE: Определи язык USER_MESSAGE. Ты ОБЯЗАН писать поля comment и question в ТОЧНО ТОМ ЖЕ ЯЗЫКЕ, что и USER_MESSAGE. Если пользователь пишет по-английски, отвечай по-английски. Если по-испански, отвечай по-испански. Всегда сохраняй холодный, циничный, финансово-терминальный тон независимо от языка.
 - Не выдумывай цифры. Если поля нет даже после BASE_CONTEXT_JSON, верни needs_clarification.
 - Все числа должны быть неотрицательными.
 - Если пользователь дал диапазон дохода, бери нижнюю границу.
@@ -116,16 +117,22 @@ ROAST_SYSTEM_PROMPT: Final[str] = """
 Верни строго JSON-объект:
 {
   "verdict": "очень короткий ярлык",
-  "comment": "2-4 коротких предложения"
+  "comment": "2-4 коротких предложения",
+  "lever_actions": [
+    "локализованный action для levers[0]",
+    "локализованный action для levers[1]",
+    "локализованный action для levers[2]"
+  ]
 }
 
 Правила:
-- Пиши по-русски.
+- LANGUAGE RULE: Detect the language of user_text. You MUST generate the verdict, comment, and every string in lever_actions in the EXACT SAME LANGUAGE as user_text. If the user writes in English, reply in English. If Spanish, reply in Spanish. Always maintain the cold, cynical, financial-terminal tone regardless of the language.
 - Тон: циничный, высокомерный, techno-trash из Алматы.
 - Уместно использовать слова hustle, cooked, runway, ngmi, survival rate.
 - Опирайся только на присланные числа и levers.
 - Если сценарий плохой, говори жёстко и прямо.
 - Если levers слабые, высмеивай это.
+- lever_actions должны сохранять тот же экономический смысл и тот же порядок, что и входные simulation.levers. Разрешено только локализовать формулировку, не менять сам совет.
 - Не используй markdown, списки, code fences и лишние поля.
 - Не упоминай старый бренд. Только MonteRun.
 """.strip()
@@ -1282,9 +1289,10 @@ def _run_math_core(params: Any) -> dict[str, Any]:
     return _normalize_simulation_result(raw_result)
 
 
-def _normalize_roast_payload(payload: dict[str, Any]) -> dict[str, str]:
+def _normalize_roast_payload(payload: dict[str, Any]) -> dict[str, Any]:
     verdict = payload.get("verdict")
     comment = payload.get("comment")
+    lever_actions = payload.get("lever_actions")
 
     if not isinstance(verdict, str) or not verdict.strip():
         raise ApiProblem(
@@ -1304,10 +1312,36 @@ def _normalize_roast_payload(payload: dict[str, Any]) -> dict[str, str]:
             400,
         )
 
+    if not isinstance(lever_actions, list) or len(lever_actions) != 3:
+        raise ApiProblem(
+            "INVALID_PARAMS",
+            "DeepSeek roast returned invalid JSON",
+            {"stage": "roast", "field": "lever_actions"},
+            False,
+            400,
+        )
+
     cleaned_verdict = _clean_text(verdict)
     cleaned_comment = _clean_text(comment)
+    cleaned_lever_actions: list[str] = []
 
-    if "forkverse" in cleaned_verdict.casefold() or "forkverse" in cleaned_comment.casefold():
+    for index, action in enumerate(lever_actions):
+        if not isinstance(action, str) or not action.strip():
+            raise ApiProblem(
+                "INVALID_PARAMS",
+                "DeepSeek roast returned invalid JSON",
+                {"stage": "roast", "field": f"lever_actions[{index}]"},
+                False,
+                400,
+            )
+        cleaned_lever_actions.append(_clean_text(action))
+
+    forbidden_brand = "forkverse"
+    if (
+        forbidden_brand in cleaned_verdict.casefold()
+        or forbidden_brand in cleaned_comment.casefold()
+        or any(forbidden_brand in action.casefold() for action in cleaned_lever_actions)
+    ):
         raise ApiProblem(
             "INVALID_PARAMS",
             "DeepSeek roast returned forbidden brand mention",
@@ -1319,6 +1353,7 @@ def _normalize_roast_payload(payload: dict[str, Any]) -> dict[str, str]:
     return {
         "verdict": cleaned_verdict,
         "comment": cleaned_comment,
+        "lever_actions": cleaned_lever_actions,
     }
 
 
@@ -1327,7 +1362,7 @@ def _call_roast_stage(
     user_text: str,
     extracted_params: Mapping[str, Any],
     simulation_result: Mapping[str, Any],
-) -> dict[str, str]:
+) -> dict[str, Any]:
     roast_input = {
         "user_text": user_text,
         "extracted_params": dict(extracted_params),
@@ -1344,14 +1379,43 @@ def _call_roast_stage(
     return _normalize_roast_payload(raw_payload)
 
 
+def _apply_localized_lever_actions(
+    simulation_result: Mapping[str, Any],
+    localized_actions: list[str],
+) -> dict[str, Any]:
+    normalized_result = _normalize_simulation_result(simulation_result)
+    normalized_levers = normalized_result.get("levers")
+
+    if not isinstance(normalized_levers, list) or len(normalized_levers) != len(localized_actions):
+        raise ApiProblem(
+            "INVALID_PARAMS",
+            "DeepSeek roast returned invalid lever localization payload",
+            {"stage": "roast", "field": "lever_actions"},
+            False,
+            400,
+        )
+
+    localized_levers: list[dict[str, Any]] = []
+    for lever, localized_action in zip(normalized_levers, localized_actions, strict=True):
+        updated_lever = dict(lever)
+        updated_lever["action"] = localized_action
+        localized_levers.append(updated_lever)
+
+    normalized_result["levers"] = localized_levers
+    return normalized_result
+
+
 def _build_ready_data(
     *,
     params: Any,
-    roast: Mapping[str, str],
+    roast: Mapping[str, Any],
     simulation_result: Mapping[str, Any],
 ) -> dict[str, Any]:
     normalized_roast = _normalize_roast_payload(dict(roast))
-    normalized_result = _normalize_simulation_result(simulation_result)
+    normalized_result = _apply_localized_lever_actions(
+        simulation_result,
+        normalized_roast["lever_actions"],
+    )
 
     return {
         "status": "ready",
@@ -1568,17 +1632,21 @@ class handler(BaseHTTPRequestHandler):
                     extracted_params=_serialize_monte_run_params(monte_run_params),
                     simulation_result=simulation_result,
                 )
+                localized_simulation_result = _apply_localized_lever_actions(
+                    simulation_result,
+                    roast["lever_actions"],
+                )
                 data = _build_ready_data(
                     params=monte_run_params,
                     roast=roast,
-                    simulation_result=simulation_result,
+                    simulation_result=localized_simulation_result,
                 )
                 _persist_scenario_state(
                     telegram_user_id=telegram_user_id,
                     request_id=request_id,
                     source_text=user_text,
                     params=_serialize_monte_run_params(monte_run_params),
-                    simulation_data=simulation_result,
+                    simulation_data=localized_simulation_result,
                     telegram_context_row=telegram_context_row,
                     scenario_state_row=scenario_state_row,
                     comment=roast["comment"],
