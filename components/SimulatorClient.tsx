@@ -1293,12 +1293,14 @@ export default function SimulatorClient() {
           .share-card__metric-row {
             position: relative;
             display: flex;
-            align-items: baseline;
-            justify-content: space-between;
+            align-items: center;
             gap: 12px;
+            width: 100%;
+            min-width: 0;
           }
 
           .share-card__metric-value {
+            flex-shrink: 0;
             font-size: clamp(2.5rem, 5vw, 3.75rem);
             font-weight: 700;
             line-height: 0.95;
@@ -1308,9 +1310,12 @@ export default function SimulatorClient() {
           }
 
           .share-card__metric-label {
-            max-width: 12ch;
+            flex: 1;
+            min-width: 0;
             text-align: right;
-            line-height: 1.5;
+            white-space: normal;
+            overflow-wrap: break-word;
+            line-height: 1.2;
           }
 
           .share-card__verdict {
