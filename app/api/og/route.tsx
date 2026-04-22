@@ -11,9 +11,8 @@ export async function GET(request: Request) {
     survival: searchParams.get("survival") ?? undefined,
     verdict: searchParams.get("verdict") ?? undefined,
   });
-
   const verdict = shareCard.verdict;
-  const truncatedVerdict = verdict.length > 130 ? `${verdict.substring(0, 130)}...` : verdict;
+  const truncatedVerdict = verdict.length > 130 ? verdict.substring(0, 130) + '...' : verdict;
 
   return new ImageResponse(
     (
@@ -24,7 +23,7 @@ export async function GET(request: Request) {
           display: "flex",
           alignItems: "stretch",
           justifyContent: "center",
-          padding: 28,
+          padding: 32,
           backgroundColor: "#0A0A0A",
           backgroundImage:
             "radial-gradient(circle at top right, rgba(157, 244, 255, 0.14), transparent 34%), linear-gradient(180deg, rgba(255,255,255,0.04), rgba(255,255,255,0.01))",
@@ -40,7 +39,7 @@ export async function GET(request: Request) {
             display: "flex",
             flexDirection: "column",
             justifyContent: "space-between",
-            padding: 48,
+            padding: 56,
             borderRadius: 34,
             border: "1px solid rgba(255,255,255,0.09)",
             backgroundColor: "#0A0A0A",
@@ -55,7 +54,7 @@ export async function GET(request: Request) {
               display: "flex",
               alignItems: "center",
               justifyContent: "space-between",
-              gap: 20,
+              gap: 24,
               flexShrink: 0,
             }}
           >
@@ -63,7 +62,7 @@ export async function GET(request: Request) {
               style={{
                 display: "flex",
                 alignItems: "center",
-                gap: 14,
+                gap: 16,
                 textTransform: "uppercase",
                 letterSpacing: "0.34em",
                 fontSize: 18,
@@ -88,9 +87,9 @@ export async function GET(request: Request) {
                 display: "flex",
                 alignItems: "center",
                 justifyContent: "center",
-                height: 42,
-                paddingLeft: 16,
-                paddingRight: 16,
+                paddingLeft: 18,
+                paddingRight: 18,
+                height: 46,
                 borderRadius: 999,
                 border: "1px solid rgba(157, 244, 255, 0.22)",
                 color: "#9df4ff",
@@ -110,10 +109,10 @@ export async function GET(request: Request) {
               display: "flex",
               flexDirection: "column",
               justifyContent: "space-between",
-              gap: 32,
+              gap: 36,
               flex: 1,
-              marginTop: 32,
-              marginBottom: 32,
+              marginTop: 36,
+              marginBottom: 36,
               overflow: "hidden",
             }}
           >
@@ -121,21 +120,22 @@ export async function GET(request: Request) {
               style={{
                 display: "flex",
                 flexDirection: "row",
-                justifyContent: "space-between",
                 alignItems: "stretch",
-                gap: 28,
+                justifyContent: "space-between",
+                gap: 36,
                 flexShrink: 0,
               }}
             >
               <div
                 style={{
                   display: "flex",
-                  flex: 1,
+                  flex: "1 1 0%",
+                  width: "52%",
                   minWidth: 0,
                   flexDirection: "column",
                   justifyContent: "space-between",
-                  gap: 24,
-                  padding: 32,
+                  gap: 28,
+                  padding: 36,
                   borderRadius: 26,
                   backgroundColor: "#0f1114",
                   border: "1px solid rgba(255,255,255,0.07)",
@@ -158,9 +158,9 @@ export async function GET(request: Request) {
                 <div
                   style={{
                     display: "flex",
-                    width: "100%",
                     alignItems: "flex-end",
-                    gap: 16,
+                    gap: 18,
+                    width: "100%",
                   }}
                 >
                   <div
@@ -175,7 +175,6 @@ export async function GET(request: Request) {
                   >
                     {formatRunwayLabel(shareCard.runway).replace("m", "")}
                   </div>
-
                   <div
                     style={{
                       display: "flex",
@@ -195,12 +194,13 @@ export async function GET(request: Request) {
               <div
                 style={{
                   display: "flex",
-                  width: 320,
-                  flexShrink: 0,
+                  flex: "1 1 0%",
+                  width: "44%",
+                  minWidth: 0,
                   flexDirection: "column",
                   justifyContent: "space-between",
-                  gap: 22,
-                  padding: 32,
+                  gap: 24,
+                  padding: 36,
                   borderRadius: 26,
                   backgroundColor: "#10151a",
                   border: "1px solid rgba(255,255,255,0.07)",
@@ -239,10 +239,10 @@ export async function GET(request: Request) {
                   style={{
                     display: "flex",
                     width: "100%",
-                    flexWrap: "wrap",
                     fontSize: 18,
                     lineHeight: 1.5,
                     color: "rgba(255,255,255,0.58)",
+                    flexWrap: "wrap",
                   }}
                 >
                   Real math. Zero motivational padding.
@@ -253,16 +253,16 @@ export async function GET(request: Request) {
             <div
               style={{
                 display: "flex",
-                flex: 1,
-                minHeight: 0,
                 flexDirection: "column",
                 justifyContent: "space-between",
-                gap: 18,
-                padding: 32,
+                gap: 22,
+                padding: 36,
                 borderRadius: 26,
                 backgroundColor: "#0f1114",
                 border: "1px solid rgba(255,255,255,0.07)",
                 overflow: "hidden",
+                flex: 1,
+                minHeight: 0,
               }}
             >
               <div
@@ -283,9 +283,9 @@ export async function GET(request: Request) {
                   display: "flex",
                   width: "100%",
                   flexWrap: "wrap",
+                  overflow: "hidden",
                   alignItems: "flex-start",
                   alignContent: "flex-start",
-                  overflow: "hidden",
                   fontSize: 46,
                   lineHeight: 1.14,
                   letterSpacing: "-0.04em",
@@ -312,7 +312,7 @@ export async function GET(request: Request) {
               display: "flex",
               alignItems: "center",
               justifyContent: "space-between",
-              gap: 20,
+              gap: 24,
               fontSize: 17,
               letterSpacing: "0.18em",
               textTransform: "uppercase",
