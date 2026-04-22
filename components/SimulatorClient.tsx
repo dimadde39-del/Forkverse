@@ -1,7 +1,7 @@
 "use client";
 
 import type { FormEvent } from "react";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import {
   Area,
   CartesianGrid,
@@ -13,6 +13,8 @@ import {
   XAxis,
   YAxis,
 } from "recharts";
+
+import { getOgImagePath, getSharePagePath } from "@/app/lib/share-card";
 
 type FlowStatus = "idle" | "parsing" | "clarifying" | "simulating" | "simulated";
 
@@ -129,6 +131,11 @@ type ShareCardViewModel = {
     label: string;
     impact: string;
   }>;
+};
+
+type ShareLinkModel = {
+  ogImagePath: string;
+  sharePagePath: string;
 };
 
 const moneyFormatter = new Intl.NumberFormat("ru-RU", {
@@ -470,6 +477,7 @@ const initialViewState: SimulatorViewState = {
 export default function SimulatorClient() {
   const [draft, setDraft] = useState("");
   const [viewState, setViewState] = useState<SimulatorViewState>(initialViewState);
+  const [copyFeedback, setCopyFeedback] = useState<"idle" | "copied" | "error">("idle");
   const { status, chatHistory, clarificationContext, parseData, simulationData, simulationMeta, errorMessage } =
     viewState;
 
@@ -611,6 +619,48 @@ export default function SimulatorClient() {
     };
   }, [simulationData, simulationMeta?.generated_at]);
 
+  const shareLinks = useMemo<ShareLinkModel | null>(() => {
+    const baseRunwayMonths = simulationData?.base_runway_months;
+    const survivalProbability12m = simulationData?.survival_probability_12m;
+    const verdict = shareCard?.verdict;
+
+    if (
+      baseRunwayMonths === null ||
+      baseRunwayMonths === undefined ||
+      survivalProbability12m === null ||
+      survivalProbability12m === undefined ||
+      !verdict
+    ) {
+      return null;
+    }
+
+    return {
+      ogImagePath: getOgImagePath({
+        runway: baseRunwayMonths,
+        survival: survivalProbability12m,
+        verdict,
+      }),
+      sharePagePath: getSharePagePath({
+        runway: baseRunwayMonths,
+        survival: survivalProbability12m,
+        verdict,
+      }),
+    };
+  }, [shareCard?.verdict, simulationData?.base_runway_months, simulationData?.survival_probability_12m]);
+
+  useEffect(() => {
+    setCopyFeedback("idle");
+  }, [shareLinks?.sharePagePath]);
+
+  useEffect(() => {
+    if (copyFeedback === "idle" || typeof window === "undefined") {
+      return;
+    }
+
+    const timeoutId = window.setTimeout(() => setCopyFeedback("idle"), 2200);
+    return () => window.clearTimeout(timeoutId);
+  }, [copyFeedback]);
+
   const readyParams = parseData?.status === "ready" ? parseData.params : null;
   const isBusy = status === "parsing" || status === "simulating";
   const composerLabel = status === "clarifying" ? "Clarification" : "Scenario";
@@ -622,6 +672,22 @@ export default function SimulatorClient() {
         : status === "simulating"
           ? "Simulating"
           : "Run simulation";
+
+  async function handleCopyShareLink() {
+    if (!shareLinks || typeof window === "undefined" || !navigator.clipboard) {
+      setCopyFeedback("error");
+      return;
+    }
+
+    try {
+      const absoluteShareUrl = new URL(shareLinks.sharePagePath, window.location.origin).toString();
+      await navigator.clipboard.writeText(absoluteShareUrl);
+      setCopyFeedback("copied");
+    } catch (error) {
+      console.error("[SimClient] Unable to copy share URL:", error);
+      setCopyFeedback("error");
+    }
+  }
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -1062,6 +1128,38 @@ export default function SimulatorClient() {
                           </div>
                         </section>
 
+                        {shareLinks ? (
+                          <section className="share-card__actions" aria-label="Share result">
+                            <button className="share-card__action-button" onClick={handleCopyShareLink} type="button">
+                              {copyFeedback === "copied"
+                                ? "Share link copied"
+                                : copyFeedback === "error"
+                                  ? "Copy unavailable"
+                                  : "Copy share link"}
+                            </button>
+                            <a
+                              className="share-card__action-link"
+                              href={shareLinks.sharePagePath}
+                              rel="noreferrer"
+                              target="_blank"
+                            >
+                              Open share page
+                            </a>
+                            <a
+                              className="share-card__action-link"
+                              href={shareLinks.ogImagePath}
+                              rel="noreferrer"
+                              target="_blank"
+                            >
+                              Open OG image
+                            </a>
+                            <div className="share-card__actions-note">
+                              Verdict, runway, and survival now resolve through a dedicated share page with live
+                              server-side OG metadata.
+                            </div>
+                          </section>
+                        ) : null}
+
                         <footer className="share-card__footer">
                           <span>monterun.io</span>
                           <strong>Math decides.</strong>
@@ -1436,6 +1534,54 @@ export default function SimulatorClient() {
             font-weight: 600;
           }
 
+          .share-card__actions {
+            display: flex;
+            flex-wrap: wrap;
+            align-items: center;
+            gap: 12px;
+            padding-top: 6px;
+          }
+
+          .share-card__action-button,
+          .share-card__action-link {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            min-height: 42px;
+            padding: 0 18px;
+            border-radius: 999px;
+            border: 1px solid var(--line);
+            background: linear-gradient(180deg, rgba(255, 255, 255, 0.03), rgba(255, 255, 255, 0.015));
+            color: var(--text-primary);
+            font-size: 0.8rem;
+            letter-spacing: 0.12em;
+            text-transform: uppercase;
+            text-decoration: none;
+            transition:
+              border-color 140ms ease,
+              background-color 140ms ease,
+              color 140ms ease;
+          }
+
+          .share-card__action-button {
+            cursor: pointer;
+          }
+
+          .share-card__action-button:hover,
+          .share-card__action-link:hover {
+            border-color: rgba(0, 255, 170, 0.28);
+            background: linear-gradient(180deg, rgba(0, 255, 170, 0.09), rgba(255, 255, 255, 0.02));
+            color: var(--accent);
+          }
+
+          .share-card__actions-note {
+            flex: 1 1 240px;
+            min-width: 0;
+            color: var(--text-secondary);
+            font-size: 0.84rem;
+            line-height: 1.5;
+          }
+
           @media (max-width: 920px) {
             .share-card {
               gap: 24px;
@@ -1478,6 +1624,15 @@ export default function SimulatorClient() {
 
             .share-card__header {
               padding-bottom: 12px;
+            }
+
+            .share-card__actions {
+              align-items: stretch;
+            }
+
+            .share-card__action-button,
+            .share-card__action-link {
+              width: 100%;
             }
 
             .share-card__runway {
