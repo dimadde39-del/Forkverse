@@ -1,11 +1,6 @@
 import { ImageResponse } from "next/og";
 
-import {
-  clampText,
-  formatRunwayLabel,
-  formatSurvivalLabel,
-  normalizeShareCardPayload,
-} from "@/app/lib/share-card";
+import { formatRunwayLabel, formatSurvivalLabel, normalizeShareCardPayload } from "@/app/lib/share-card";
 
 export const runtime = "edge";
 
@@ -16,16 +11,20 @@ export async function GET(request: Request) {
     survival: searchParams.get("survival") ?? undefined,
     verdict: searchParams.get("verdict") ?? undefined,
   });
-  const verdict = clampText(shareCard.verdict, 110) || shareCard.verdict;
+
+  const verdict = shareCard.verdict;
+  const truncatedVerdict = verdict.length > 130 ? `${verdict.substring(0, 130)}...` : verdict;
 
   return new ImageResponse(
     (
       <div
         style={{
-          width: "100%",
-          height: "100%",
+          width: 1200,
+          height: 630,
           display: "flex",
-          padding: "36px",
+          alignItems: "stretch",
+          justifyContent: "center",
+          padding: 28,
           backgroundColor: "#0A0A0A",
           backgroundImage:
             "radial-gradient(circle at top right, rgba(157, 244, 255, 0.14), transparent 34%), linear-gradient(180deg, rgba(255,255,255,0.04), rgba(255,255,255,0.01))",
@@ -36,19 +35,19 @@ export async function GET(request: Request) {
       >
         <div
           style={{
-            position: "relative",
             width: "100%",
             height: "100%",
             display: "flex",
             flexDirection: "column",
             justifyContent: "space-between",
-            padding: "40px",
-            borderRadius: "34px",
+            padding: 48,
+            borderRadius: 34,
             border: "1px solid rgba(255,255,255,0.09)",
             backgroundColor: "#0A0A0A",
             backgroundImage:
               "linear-gradient(180deg, rgba(255,255,255,0.05), rgba(255,255,255,0.01)), radial-gradient(circle at top right, rgba(173, 242, 255, 0.08), transparent 28%)",
             boxShadow: "0 32px 90px rgba(0, 0, 0, 0.5)",
+            overflow: "hidden",
           }}
         >
           <div
@@ -56,44 +55,50 @@ export async function GET(request: Request) {
               display: "flex",
               alignItems: "center",
               justifyContent: "space-between",
-              gap: "20px",
+              gap: 20,
+              flexShrink: 0,
             }}
           >
             <div
               style={{
                 display: "flex",
                 alignItems: "center",
-                gap: "14px",
+                gap: 14,
                 textTransform: "uppercase",
                 letterSpacing: "0.34em",
-                fontSize: "18px",
+                fontSize: 18,
                 color: "rgba(255,255,255,0.84)",
               }}
             >
               <div
                 style={{
-                  width: "14px",
-                  height: "14px",
-                  borderRadius: "999px",
+                  display: "flex",
+                  width: 14,
+                  height: 14,
+                  borderRadius: 999,
                   backgroundColor: "#9df4ff",
                   boxShadow: "0 0 32px rgba(157, 244, 255, 0.4)",
                 }}
               />
-              <span>MonteRun</span>
+              <div style={{ display: "flex" }}>MonteRun</div>
             </div>
 
             <div
               style={{
                 display: "flex",
                 alignItems: "center",
-                padding: "10px 16px",
-                borderRadius: "999px",
+                justifyContent: "center",
+                height: 42,
+                paddingLeft: 16,
+                paddingRight: 16,
+                borderRadius: 999,
                 border: "1px solid rgba(157, 244, 255, 0.22)",
                 color: "#9df4ff",
                 backgroundColor: "rgba(157, 244, 255, 0.06)",
                 textTransform: "uppercase",
                 letterSpacing: "0.18em",
-                fontSize: "15px",
+                fontSize: 15,
+                flexShrink: 0,
               }}
             >
               Deterministic share card
@@ -104,33 +109,44 @@ export async function GET(request: Request) {
             style={{
               display: "flex",
               flexDirection: "column",
-              gap: "28px",
+              justifyContent: "space-between",
+              gap: 32,
+              flex: 1,
+              marginTop: 32,
+              marginBottom: 32,
+              overflow: "hidden",
             }}
           >
             <div
               style={{
                 display: "flex",
-                gap: "24px",
+                flexDirection: "row",
+                justifyContent: "space-between",
                 alignItems: "stretch",
+                gap: 28,
+                flexShrink: 0,
               }}
             >
               <div
                 style={{
-                  flex: "1 1 0%",
                   display: "flex",
+                  flex: 1,
+                  minWidth: 0,
                   flexDirection: "column",
                   justifyContent: "space-between",
-                  gap: "18px",
-                  padding: "28px",
-                  borderRadius: "26px",
+                  gap: 24,
+                  padding: 32,
+                  borderRadius: 26,
                   backgroundColor: "#0f1114",
                   border: "1px solid rgba(255,255,255,0.07)",
+                  overflow: "hidden",
                 }}
               >
                 <div
                   style={{
                     display: "flex",
-                    fontSize: "17px",
+                    width: "100%",
+                    fontSize: 17,
                     textTransform: "uppercase",
                     letterSpacing: "0.26em",
                     color: "rgba(255,255,255,0.52)",
@@ -142,29 +158,33 @@ export async function GET(request: Request) {
                 <div
                   style={{
                     display: "flex",
+                    width: "100%",
                     alignItems: "flex-end",
-                    gap: "16px",
+                    gap: 16,
                   }}
                 >
                   <div
                     style={{
                       display: "flex",
-                      fontSize: "136px",
-                      lineHeight: "0.9",
+                      fontSize: 138,
+                      lineHeight: 0.88,
                       letterSpacing: "-0.08em",
                       fontWeight: 700,
+                      flexShrink: 0,
                     }}
                   >
                     {formatRunwayLabel(shareCard.runway).replace("m", "")}
                   </div>
+
                   <div
                     style={{
                       display: "flex",
-                      paddingBottom: "14px",
-                      fontSize: "24px",
+                      paddingBottom: 14,
+                      fontSize: 24,
                       letterSpacing: "0.24em",
                       textTransform: "uppercase",
                       color: "#9df4ff",
+                      flexShrink: 0,
                     }}
                   >
                     Months
@@ -174,21 +194,24 @@ export async function GET(request: Request) {
 
               <div
                 style={{
-                  width: "330px",
                   display: "flex",
+                  width: 320,
+                  flexShrink: 0,
                   flexDirection: "column",
                   justifyContent: "space-between",
-                  gap: "18px",
-                  padding: "28px",
-                  borderRadius: "26px",
+                  gap: 22,
+                  padding: 32,
+                  borderRadius: 26,
                   backgroundColor: "#10151a",
                   border: "1px solid rgba(255,255,255,0.07)",
+                  overflow: "hidden",
                 }}
               >
                 <div
                   style={{
                     display: "flex",
-                    fontSize: "17px",
+                    width: "100%",
+                    fontSize: 17,
                     textTransform: "uppercase",
                     letterSpacing: "0.26em",
                     color: "rgba(255,255,255,0.52)",
@@ -200,11 +223,13 @@ export async function GET(request: Request) {
                 <div
                   style={{
                     display: "flex",
-                    fontSize: "74px",
-                    lineHeight: "0.92",
+                    width: "100%",
+                    fontSize: 74,
+                    lineHeight: 0.92,
                     letterSpacing: "-0.06em",
                     fontWeight: 700,
                     color: "#9df4ff",
+                    flexShrink: 0,
                   }}
                 >
                   {formatSurvivalLabel(shareCard.survival)}
@@ -213,8 +238,10 @@ export async function GET(request: Request) {
                 <div
                   style={{
                     display: "flex",
-                    fontSize: "18px",
-                    lineHeight: "1.5",
+                    width: "100%",
+                    flexWrap: "wrap",
+                    fontSize: 18,
+                    lineHeight: 1.5,
                     color: "rgba(255,255,255,0.58)",
                   }}
                 >
@@ -226,18 +253,23 @@ export async function GET(request: Request) {
             <div
               style={{
                 display: "flex",
+                flex: 1,
+                minHeight: 0,
                 flexDirection: "column",
-                gap: "16px",
-                padding: "28px",
-                borderRadius: "26px",
+                justifyContent: "space-between",
+                gap: 18,
+                padding: 32,
+                borderRadius: 26,
                 backgroundColor: "#0f1114",
                 border: "1px solid rgba(255,255,255,0.07)",
+                overflow: "hidden",
               }}
             >
               <div
                 style={{
                   display: "flex",
-                  fontSize: "17px",
+                  width: "100%",
+                  fontSize: 17,
                   textTransform: "uppercase",
                   letterSpacing: "0.26em",
                   color: "rgba(255,255,255,0.52)",
@@ -249,14 +281,28 @@ export async function GET(request: Request) {
               <div
                 style={{
                   display: "flex",
-                  maxWidth: "920px",
-                  fontSize: "48px",
-                  lineHeight: "1.12",
+                  width: "100%",
+                  flexWrap: "wrap",
+                  alignItems: "flex-start",
+                  alignContent: "flex-start",
+                  overflow: "hidden",
+                  fontSize: 46,
+                  lineHeight: 1.14,
                   letterSpacing: "-0.04em",
                   fontWeight: 600,
+                  minHeight: 0,
                 }}
               >
-                {verdict}
+                <div
+                  style={{
+                    display: "flex",
+                    width: "100%",
+                    flexWrap: "wrap",
+                    overflow: "hidden",
+                  }}
+                >
+                  {truncatedVerdict}
+                </div>
               </div>
             </div>
           </div>
@@ -266,11 +312,12 @@ export async function GET(request: Request) {
               display: "flex",
               alignItems: "center",
               justifyContent: "space-between",
-              gap: "20px",
-              fontSize: "17px",
+              gap: 20,
+              fontSize: 17,
               letterSpacing: "0.18em",
               textTransform: "uppercase",
               color: "rgba(255,255,255,0.38)",
+              flexShrink: 0,
             }}
           >
             <div style={{ display: "flex" }}>monterun.io</div>
