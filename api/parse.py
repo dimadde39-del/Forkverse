@@ -116,24 +116,25 @@ ROAST_SYSTEM_PROMPT: Final[str] = """
 
 Верни строго JSON-объект:
 {
-  "verdict": "[INSERT VERDICT IN USER'S EXACT LANGUAGE]",
-  "comment": "[INSERT 2-4 SHORT SENTENCES IN USER'S EXACT LANGUAGE]",
-  "lever_actions": [
-    "[LOCALIZE simulation.levers[0].action INTO USER'S EXACT LANGUAGE]",
-    "[LOCALIZE simulation.levers[1].action INTO USER'S EXACT LANGUAGE]",
-    "[LOCALIZE simulation.levers[2].action INTO USER'S EXACT LANGUAGE]"
+  "verdict": "[INSERT VERDICT IN USER LANGUAGE]",
+  "comment": "[INSERT 2-4 SHORT SENTENCES IN USER LANGUAGE]",
+  "levers": [
+    { "action": "[INSERT LEVER LABEL IN USER LANGUAGE]" },
+    { "action": "[INSERT LEVER LABEL IN USER LANGUAGE]" },
+    { "action": "[INSERT LEVER LABEL IN USER LANGUAGE]" }
   ]
 }
 
 Правила:
 - CRITICAL: The output MUST be in the exact same language as the Original user request. Do not default to Russian unless the user wrote in Russian.
-- LANGUAGE RULE: Detect the language of the Original user request. You MUST generate the verdict, comment, and every string in lever_actions in the EXACT SAME LANGUAGE as the Original user request. If the user writes in English, reply in English. If Spanish, reply in Spanish. Always maintain the cold, cynical, financial-terminal tone regardless of the language.
+- CRITICAL: ALL text properties must be in the user's detected language, including verdict, comment, and the action text inside each lever entry in the levers array. If the user writes in English, reply in English. If Spanish, reply in Spanish. Always maintain the cold, cynical, financial-terminal tone regardless of the language.
+- LANGUAGE RULE: Detect the language of the Original user request and apply it to every user-facing text field in the roast output.
 - Тон: циничный, высокомерный, techno-trash из Алматы.
 - Уместно использовать слова hustle, cooked, runway, ngmi, survival rate.
 - Опирайся только на присланные числа и levers.
 - Если сценарий плохой, говори жёстко и прямо.
 - Если levers слабые, высмеивай это.
-- lever_actions должны сохранять тот же экономический смысл и тот же порядок, что и входные simulation.levers. Разрешено только локализовать формулировку, не менять сам совет.
+- levers[*].action должны сохранять тот же экономический смысл и тот же порядок, что и входные simulation.levers. Разрешено только локализовать формулировку, не менять сам совет.
 - Не используй markdown, списки, code fences и лишние поля.
 - Не упоминай старый бренд. Только MonteRun.
 """.strip()
@@ -1294,6 +1295,7 @@ def _normalize_roast_payload(payload: dict[str, Any]) -> dict[str, Any]:
     verdict = payload.get("verdict")
     comment = payload.get("comment")
     lever_actions = payload.get("lever_actions")
+    levers = payload.get("levers")
 
     if not isinstance(verdict, str) or not verdict.strip():
         raise ApiProblem(
@@ -1313,29 +1315,51 @@ def _normalize_roast_payload(payload: dict[str, Any]) -> dict[str, Any]:
             400,
         )
 
-    if not isinstance(lever_actions, list) or len(lever_actions) != 3:
-        raise ApiProblem(
-            "INVALID_PARAMS",
-            "DeepSeek roast returned invalid JSON",
-            {"stage": "roast", "field": "lever_actions"},
-            False,
-            400,
-        )
-
     cleaned_verdict = _clean_text(verdict)
     cleaned_comment = _clean_text(comment)
     cleaned_lever_actions: list[str] = []
 
-    for index, action in enumerate(lever_actions):
-        if not isinstance(action, str) or not action.strip():
-            raise ApiProblem(
-                "INVALID_PARAMS",
-                "DeepSeek roast returned invalid JSON",
-                {"stage": "roast", "field": f"lever_actions[{index}]"},
-                False,
-                400,
-            )
-        cleaned_lever_actions.append(_clean_text(action))
+    if isinstance(levers, list) and len(levers) == 3:
+        for index, lever in enumerate(levers):
+            if not isinstance(lever, Mapping):
+                raise ApiProblem(
+                    "INVALID_PARAMS",
+                    "DeepSeek roast returned invalid JSON",
+                    {"stage": "roast", "field": f"levers[{index}]"},
+                    False,
+                    400,
+                )
+
+            action = lever.get("action")
+            if not isinstance(action, str) or not action.strip():
+                raise ApiProblem(
+                    "INVALID_PARAMS",
+                    "DeepSeek roast returned invalid JSON",
+                    {"stage": "roast", "field": f"levers[{index}].action"},
+                    False,
+                    400,
+                )
+
+            cleaned_lever_actions.append(_clean_text(action))
+    elif isinstance(lever_actions, list) and len(lever_actions) == 3:
+        for index, action in enumerate(lever_actions):
+            if not isinstance(action, str) or not action.strip():
+                raise ApiProblem(
+                    "INVALID_PARAMS",
+                    "DeepSeek roast returned invalid JSON",
+                    {"stage": "roast", "field": f"lever_actions[{index}]"},
+                    False,
+                    400,
+                )
+            cleaned_lever_actions.append(_clean_text(action))
+    else:
+        raise ApiProblem(
+            "INVALID_PARAMS",
+            "DeepSeek roast returned invalid JSON",
+            {"stage": "roast", "field": "levers"},
+            False,
+            400,
+        )
 
     forbidden_brand = "forkverse"
     if (
@@ -1365,7 +1389,7 @@ def _call_roast_stage(
     simulation_result: Mapping[str, Any],
 ) -> dict[str, Any]:
     roast_input = (
-        "Original user request:\n"
+        "Original user request anchor:\n"
         f"{user_text.strip()}\n\n"
         "CRITICAL LANGUAGE ANCHOR:\n"
         "Use only the Original user request above to determine the response language.\n\n"

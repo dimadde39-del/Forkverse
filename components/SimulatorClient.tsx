@@ -1391,7 +1391,7 @@ export default function SimulatorClient() {
           .share-card__metric-row {
             position: relative;
             display: flex;
-            align-items: center;
+            align-items: flex-start;
             gap: 12px;
             width: 100%;
             min-width: 0;
@@ -1408,12 +1408,14 @@ export default function SimulatorClient() {
           }
 
           .share-card__metric-label {
-            flex: 1;
+            flex: 1 1 0;
             min-width: 0;
             text-align: right;
             white-space: normal;
-            overflow-wrap: break-word;
-            line-height: 1.2;
+            overflow-wrap: anywhere;
+            word-break: normal;
+            text-wrap: balance;
+            line-height: 1.15;
           }
 
           .share-card__verdict {
@@ -1657,6 +1659,11 @@ export default function SimulatorClient() {
 
             .share-card__metric-value {
               font-size: clamp(2rem, 11vw, 3rem);
+            }
+
+            .share-card__metric-label {
+              font-size: 0.68rem;
+              letter-spacing: 0.18em;
             }
 
             .share-card__verdict {
