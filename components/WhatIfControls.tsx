@@ -20,11 +20,12 @@ type SliderDescriptor = {
   min: number;
   max: number;
   step: number;
-  formatValue: (value: number) => string;
+  formatValue: (value: number, currencySymbol: string) => string;
 };
 
 export type WhatIfControlsProps = {
   params: WhatIfSimulationParams | null;
+  currencySymbol?: string;
   disabled?: boolean;
   loading?: boolean;
   className?: string;
@@ -44,18 +45,31 @@ const moneyFormatter = new Intl.NumberFormat("ru-RU", {
   maximumFractionDigits: 0,
 });
 
+const prefixMoneyFormatter = new Intl.NumberFormat("en-US", {
+  maximumFractionDigits: 0,
+});
+
+const PREFIX_CURRENCY_SYMBOLS = new Set(["$", "€", "£"]);
+
 function roundUpToStep(value: number, step: number): number {
   return Math.ceil(Math.max(value, step) / step) * step;
 }
 
-function formatCurrency(value: number): string {
-  return `${moneyFormatter.format(Math.round(value))} KZT`;
+function isPrefixCurrencySymbol(currencySymbol: string): boolean {
+  return PREFIX_CURRENCY_SYMBOLS.has(currencySymbol);
 }
 
-function formatSignedCurrency(value: number): string {
+function formatCurrency(value: number, currencySymbol: string): string {
+  const formatter = isPrefixCurrencySymbol(currencySymbol) ? prefixMoneyFormatter : moneyFormatter;
+  const amount = formatter.format(Math.round(value));
+
+  return isPrefixCurrencySymbol(currencySymbol) ? `${currencySymbol} ${amount}` : `${amount} ${currencySymbol}`;
+}
+
+function formatSignedCurrency(value: number, currencySymbol: string): string {
   const rounded = Math.round(value);
   const sign = rounded > 0 ? "+" : rounded < 0 ? "-" : "";
-  return `${sign}${moneyFormatter.format(Math.abs(rounded))} KZT`;
+  return `${sign}${formatCurrency(Math.abs(rounded), currencySymbol)}`;
 }
 
 function formatDelayMonths(value: number): string {
@@ -123,6 +137,7 @@ function buildSliders(params: WhatIfSimulationParams): SliderDescriptor[] {
 
 export default function WhatIfControls({
   params,
+  currencySymbol = "$",
   disabled = false,
   loading = false,
   className = "",
@@ -180,7 +195,9 @@ export default function WhatIfControls({
         <div className="mb-5 grid grid-cols-2 gap-3">
           <div className="rounded-2xl border border-white/10 bg-black/18 px-3 py-3">
             <div className="text-[10px] uppercase tracking-[0.18em] text-white/40">Net / month</div>
-            <div className="mt-2 font-mono text-sm text-white tabular-nums">{formatSignedCurrency(netAfterIncome)}</div>
+            <div className="mt-2 font-mono text-sm text-white tabular-nums">
+              {formatSignedCurrency(netAfterIncome, currencySymbol)}
+            </div>
           </div>
           <div className="rounded-2xl border border-white/10 bg-black/18 px-3 py-3">
             <div className="text-[10px] uppercase tracking-[0.18em] text-white/40">Horizon</div>
@@ -204,12 +221,12 @@ export default function WhatIfControls({
                     </span>
                   </span>
                   <span className="shrink-0 rounded-full border border-white/10 bg-white/5 px-3 py-1 font-mono text-[12px] text-emerald-100 tabular-nums">
-                    {slider.formatValue(value)}
+                    {slider.formatValue(value, currencySymbol)}
                   </span>
                 </div>
 
                 <input
-                  aria-valuetext={slider.formatValue(value)}
+                  aria-valuetext={slider.formatValue(value, currencySymbol)}
                   className="what-if-range w-full"
                   disabled={controlsDisabled}
                   max={slider.max}

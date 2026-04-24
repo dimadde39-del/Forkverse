@@ -68,6 +68,7 @@ const simulationParamKeys = [
 type ParseReady = {
   status: "ready";
   params: SimulationParams;
+  currency_symbol: string;
   question: null;
 };
 
@@ -128,6 +129,7 @@ type MonteCarloChartPoint = {
 type CustomTooltipProps = {
   active?: boolean;
   payload?: Array<{ payload: MonteCarloChartPoint }>;
+  currencySymbol: string;
 };
 
 type ShareCardViewModel = {
@@ -153,6 +155,12 @@ type ShareLinkModel = {
 const moneyFormatter = new Intl.NumberFormat("ru-RU", {
   maximumFractionDigits: 0,
 });
+
+const prefixMoneyFormatter = new Intl.NumberFormat("en-US", {
+  maximumFractionDigits: 0,
+});
+
+const PREFIX_CURRENCY_SYMBOLS = new Set(["$", "€", "£"]);
 
 const panelClass =
   "rounded-[28px] border border-white/10 bg-white/5 shadow-[0_24px_80px_rgba(0,0,0,0.24)] backdrop-blur-md";
@@ -286,31 +294,54 @@ function clampPct(value: number): number {
   return Math.max(0, Math.min(100, value));
 }
 
-function formatCurrencySigned(value: number): string {
+function normalizeCurrencySymbol(value: unknown): string {
+  if (typeof value !== "string") {
+    return "$";
+  }
+
+  const trimmed = value.trim();
+  return trimmed.length > 0 ? trimmed : "$";
+}
+
+function isPrefixCurrencySymbol(currencySymbol: string): boolean {
+  return PREFIX_CURRENCY_SYMBOLS.has(currencySymbol);
+}
+
+function formatUnsignedCurrency(value: number, currencySymbol: string): string {
+  const rounded = Math.round(value);
+  const formatter = isPrefixCurrencySymbol(currencySymbol) ? prefixMoneyFormatter : moneyFormatter;
+  const amount = formatter.format(rounded);
+
+  return isPrefixCurrencySymbol(currencySymbol) ? `${currencySymbol} ${amount}` : `${amount} ${currencySymbol}`;
+}
+
+function formatCurrencySigned(value: number, currencySymbol: string): string {
   const rounded = Math.round(value);
   const sign = rounded > 0 ? "+" : rounded < 0 ? "-" : "";
-  return `${sign}${moneyFormatter.format(Math.abs(rounded))} ₸`;
+  return `${sign}${formatUnsignedCurrency(Math.abs(rounded), currencySymbol)}`;
 }
 
-function formatCurrency(value: number): string {
-  return `${moneyFormatter.format(Math.round(value))} ₸`;
+function formatCurrency(value: number, currencySymbol: string): string {
+  return formatUnsignedCurrency(value, currencySymbol);
 }
 
-function formatAxisCurrency(value: number): string {
+function formatAxisCurrency(value: number, currencySymbol: string): string {
   const absolute = Math.abs(value);
   const sign = value < 0 ? "-" : "";
+  let compactValue: string;
 
   if (absolute >= 1_000_000) {
-    const compact = absolute >= 10_000_000 ? (absolute / 1_000_000).toFixed(0) : (absolute / 1_000_000).toFixed(1);
-    return `${sign}${compact}M`;
+    compactValue =
+      absolute >= 10_000_000 ? `${(absolute / 1_000_000).toFixed(0)}M` : `${(absolute / 1_000_000).toFixed(1)}M`;
+  } else if (absolute >= 1_000) {
+    compactValue = absolute >= 100_000 ? `${(absolute / 1_000).toFixed(0)}k` : `${(absolute / 1_000).toFixed(1)}k`;
+  } else {
+    return `${sign}${formatUnsignedCurrency(absolute, currencySymbol)}`;
   }
 
-  if (absolute >= 1_000) {
-    const compact = absolute >= 100_000 ? (absolute / 1_000).toFixed(0) : (absolute / 1_000).toFixed(1);
-    return `${sign}${compact}k`;
-  }
-
-  return `${sign}${moneyFormatter.format(absolute)}`;
+  return isPrefixCurrencySymbol(currencySymbol)
+    ? `${sign}${currencySymbol} ${compactValue}`
+    : `${sign}${compactValue} ${currencySymbol}`;
 }
 
 function formatDelayMonths(value: number): string {
@@ -368,7 +399,7 @@ function formatShareTimestamp(iso: string): string {
   return `${year}-${month}-${day} ${hours}:${minutes} UTC`;
 }
 
-function CustomTooltip({ active, payload }: CustomTooltipProps) {
+function CustomTooltip({ active, payload, currencySymbol }: CustomTooltipProps) {
   if (!active || !payload || payload.length === 0) {
     return null;
   }
@@ -382,9 +413,15 @@ function CustomTooltip({ active, payload }: CustomTooltipProps) {
     <div className="min-w-[232px] rounded-3xl border border-white/12 bg-[rgba(8,8,8,0.88)] px-4 py-3 shadow-[0_18px_60px_rgba(0,0,0,0.34)] backdrop-blur-xl sm:min-w-[268px]">
       <div className="text-sm font-medium text-white">Месяц {point.month}</div>
       <div className="mt-3 space-y-1.5 text-[12px] text-white/78">
-        <div className="font-mono tabular-nums text-emerald-200">▲ P90: {formatCurrencySigned(point.p90)} (топ 10%)</div>
-        <div className="font-mono tabular-nums text-emerald-300">◆ P50: {formatCurrencySigned(point.p50)} (медиана)</div>
-        <div className="font-mono tabular-nums text-white/72">▼ P10: {formatCurrencySigned(point.p10)} (худшие 10%)</div>
+        <div className="font-mono tabular-nums text-emerald-200">
+          ▲ P90: {formatCurrencySigned(point.p90, currencySymbol)} (топ 10%)
+        </div>
+        <div className="font-mono tabular-nums text-emerald-300">
+          ◆ P50: {formatCurrencySigned(point.p50, currencySymbol)} (медиана)
+        </div>
+        <div className="font-mono tabular-nums text-white/72">
+          ▼ P10: {formatCurrencySigned(point.p10, currencySymbol)} (худшие 10%)
+        </div>
       </div>
       <div className="mt-3 border-t border-white/10 pt-3 font-mono text-[12px] text-white/64 tabular-nums">
         Банкротство в этом месяце: {point.bankruptcyRisk.toFixed(0)}%
@@ -462,6 +499,7 @@ function normalizeParseResponseData(value: unknown): ParseResponseData {
       months: normalizeIntField(params.months, "months", 1),
       n_simulations: normalizeIntField(params.n_simulations, "n_simulations", 1, 4000),
     },
+    currency_symbol: normalizeCurrencySymbol(value.currency_symbol ?? params.currency_symbol),
     question: null,
   };
 }
@@ -521,6 +559,7 @@ export default function SimulatorClient() {
   const [copyFeedback, setCopyFeedback] = useState<"idle" | "copied" | "error">("idle");
   const { status, chatHistory, clarificationContext, parseData, simulationData, simulationMeta, errorMessage } =
     viewState;
+  const currencySymbol = parseData?.status === "ready" ? parseData.currency_symbol : "$";
 
   const rawSeriesKeys = useMemo(() => Array.from({ length: 50 }, (_, index) => `sim${index}` as SimKey), []);
 
@@ -982,6 +1021,7 @@ export default function SimulatorClient() {
             </div>
 
             <WhatIfControls
+              currencySymbol={currencySymbol}
               disabled={status !== "simulated"}
               loading={whatIfSimulation.isPending}
               onChange={handleWhatIfParamsChange}
@@ -1047,7 +1087,7 @@ export default function SimulatorClient() {
                       <div className="rounded-3xl border border-white/10 bg-white/5 px-4 py-3">
                         <div className="text-[11px] uppercase tracking-[0.18em] text-white/46">Median End</div>
                         <div className="mt-2 font-mono text-base text-white tabular-nums">
-                          {formatCurrency(chartSummary.medianEndingBalance)}
+                          {formatCurrency(chartSummary.medianEndingBalance, currencySymbol)}
                         </div>
                       </div>
                       <div className="rounded-3xl border border-white/10 bg-white/5 px-4 py-3">
@@ -1074,10 +1114,10 @@ export default function SimulatorClient() {
                           {chartSummary.horizon} months
                         </div>
                         <div className="rounded-full border border-white/10 bg-white/5 px-3 py-1.5 font-mono text-[11px] text-white/62 tabular-nums">
-                          P90 {formatCurrency(chartSummary.optimisticEndingBalance)}
+                          P90 {formatCurrency(chartSummary.optimisticEndingBalance, currencySymbol)}
                         </div>
                         <div className="rounded-full border border-white/10 bg-white/5 px-3 py-1.5 font-mono text-[11px] text-white/62 tabular-nums">
-                          P10 {formatCurrency(chartSummary.pessimisticEndingBalance)}
+                          P10 {formatCurrency(chartSummary.pessimisticEndingBalance, currencySymbol)}
                         </div>
                       </div>
                     </div>
@@ -1135,14 +1175,14 @@ export default function SimulatorClient() {
                               fontSize: 12,
                               fontFamily: "ui-monospace, SFMono-Regular, monospace",
                             }}
-                            tickFormatter={(value: number) => formatAxisCurrency(value)}
+                            tickFormatter={(value: number) => formatAxisCurrency(value, currencySymbol)}
                             tickLine={false}
                             width={72}
                           />
                           <ReferenceLine stroke="rgba(255,255,255,0.14)" strokeDasharray="4 4" y={0} />
                           <Tooltip
                             cursor={{ stroke: "rgba(255,255,255,0.24)", strokeWidth: 1, strokeDasharray: "3 3" }}
-                            content={<CustomTooltip />}
+                            content={<CustomTooltip currencySymbol={currencySymbol} />}
                           />
 
                           {rawSeriesKeys.map((key) => (

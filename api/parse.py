@@ -56,6 +56,8 @@ MONTE_RUN_PARAM_FIELDS: Final[tuple[str, ...]] = (
     "fixed_expenses",
     "flexible_expenses",
 )
+CURRENCY_SYMBOL_FIELD: Final[str] = "currency_symbol"
+DEFAULT_CURRENCY_SYMBOL: Final[str] = "$"
 LEGACY_SIMULATION_MONTHS: Final[int] = 24
 LEGACY_SIMULATION_PATHS: Final[int] = 1_000
 
@@ -76,7 +78,8 @@ EXTRACTION_SYSTEM_PROMPT: Final[str] = """
     "cash": number,
     "monthly_income": number,
     "fixed_expenses": number,
-    "flexible_expenses": number
+    "flexible_expenses": number,
+    "currency_symbol": string
   },
   "question": null,
   "comment": "короткая сухая строка"
@@ -89,7 +92,8 @@ EXTRACTION_SYSTEM_PROMPT: Final[str] = """
     "cash": number | null,
     "monthly_income": number | null,
     "fixed_expenses": number | null,
-    "flexible_expenses": number | null
+    "flexible_expenses": number | null,
+    "currency_symbol": string
   },
   "question": "один короткий вопрос по самому блокирующему полю",
   "comment": "короткая сухая строка о том, чего не хватает"
@@ -98,6 +102,7 @@ EXTRACTION_SYSTEM_PROMPT: Final[str] = """
 Правила:
 - Используй BASE_CONTEXT_JSON как доверенную память, если он передан.
 - Если в USER_MESSAGE есть явное новое число, оно важнее контекста.
+- Detect the currency used in the text and return its symbol (e.g., '$', '€', '£', '₸'). If no currency is mentioned, default to '$'.
 - LANGUAGE RULE: Определи язык USER_MESSAGE. Ты ОБЯЗАН писать поля comment и question в ТОЧНО ТОМ ЖЕ ЯЗЫКЕ, что и USER_MESSAGE. Если пользователь пишет по-английски, отвечай по-английски. Если по-испански, отвечай по-испански. Всегда сохраняй холодный, циничный, финансово-терминальный тон независимо от языка.
 - Не выдумывай цифры. Если поля нет даже после BASE_CONTEXT_JSON, верни needs_clarification.
 - Все числа должны быть неотрицательными.
@@ -302,6 +307,34 @@ def _coerce_non_negative_float(
         )
 
     return float(numeric_value)
+
+
+def _normalize_currency_symbol(value: Any) -> str:
+    if not isinstance(value, str):
+        return DEFAULT_CURRENCY_SYMBOL
+
+    normalized = _clean_text(value)
+    if not normalized:
+        return DEFAULT_CURRENCY_SYMBOL
+
+    currency_aliases = {
+        "$": "$",
+        "usd": "$",
+        "dollar": "$",
+        "dollars": "$",
+        "€": "€",
+        "eur": "€",
+        "euro": "€",
+        "euros": "€",
+        "£": "£",
+        "gbp": "£",
+        "pound": "£",
+        "pounds": "£",
+        "₸": "₸",
+        "kzt": "₸",
+        "tenge": "₸",
+    }
+    return currency_aliases.get(normalized.casefold(), normalized)
 
 
 def _coerce_positive_int(name: str, value: Any) -> int:
@@ -764,19 +797,25 @@ def _extract_base_params_snapshot(parser_context_payload: Mapping[str, Any] | st
 
     base_params = _extract_json_object(parser_context_payload.get("base_params"))
     if base_params:
-        return {
+        snapshot = {
             field: base_params[field]
             for field in MONTE_RUN_PARAM_FIELDS
             if base_params.get(field) is not None
         }
+        if base_params.get(CURRENCY_SYMBOL_FIELD) is not None:
+            snapshot[CURRENCY_SYMBOL_FIELD] = base_params[CURRENCY_SYMBOL_FIELD]
+        return snapshot
 
     previous_scenario = _extract_json_object(parser_context_payload.get("previous_scenario"))
     if previous_scenario:
-        return {
+        snapshot = {
             field: previous_scenario[field]
             for field in MONTE_RUN_PARAM_FIELDS
             if previous_scenario.get(field) is not None
         }
+        if previous_scenario.get(CURRENCY_SYMBOL_FIELD) is not None:
+            snapshot[CURRENCY_SYMBOL_FIELD] = previous_scenario[CURRENCY_SYMBOL_FIELD]
+        return snapshot
 
     return None
 
@@ -1023,6 +1062,10 @@ def _extract_context_params(parser_input: str) -> dict[str, Any] | None:
             if value is not None:
                 params[field] = value
 
+        currency_symbol = candidate.get(CURRENCY_SYMBOL_FIELD)
+        if currency_symbol is not None:
+            params[CURRENCY_SYMBOL_FIELD] = currency_symbol
+
     return params or None
 
 
@@ -1037,6 +1080,10 @@ def _merge_extracted_params(
             value = raw_params.get(field)
             if value is not None:
                 merged[field] = value
+
+        currency_symbol = raw_params.get(CURRENCY_SYMBOL_FIELD)
+        if currency_symbol is not None:
+            merged[CURRENCY_SYMBOL_FIELD] = currency_symbol
 
     return merged
 
@@ -1077,7 +1124,9 @@ def _normalize_extraction_payload(
         )
     cleaned_comment = _clean_text(comment)
 
-    merged_params = _merge_extracted_params(payload.get("params"), fallback_params)
+    raw_params = payload.get("params")
+    merged_params = _merge_extracted_params(raw_params, fallback_params)
+    currency_symbol = _normalize_currency_symbol(merged_params.get(CURRENCY_SYMBOL_FIELD))
     missing_fields = _missing_param_fields(merged_params)
 
     if not missing_fields:
@@ -1085,6 +1134,7 @@ def _normalize_extraction_payload(
             field: _coerce_non_negative_float(field, merged_params[field], stage="extraction")
             for field in MONTE_RUN_PARAM_FIELDS
         }
+        normalized_params[CURRENCY_SYMBOL_FIELD] = currency_symbol
         return {
             "status": "ready",
             "params": normalized_params,
@@ -1094,10 +1144,18 @@ def _normalize_extraction_payload(
 
     question = payload.get("question")
     cleaned_question = _clean_text(question) if isinstance(question, str) and question.strip() else _build_clarification_question(missing_fields)
+    clarification_params = None
+    if isinstance(raw_params, Mapping):
+        clarification_params = {
+            field: merged_params.get(field)
+            for field in MONTE_RUN_PARAM_FIELDS
+        }
+        clarification_params[CURRENCY_SYMBOL_FIELD] = currency_symbol
 
     return {
         "status": "needs_clarification",
-        "params": None,
+        "params": clarification_params,
+        CURRENCY_SYMBOL_FIELD: currency_symbol,
         "question": cleaned_question,
         "comment": cleaned_comment,
     }
@@ -1133,7 +1191,10 @@ def _get_math_core():
     return MonteRunParams, run_simulation, simulate, compute_metrics
 
 
-def _serialize_monte_run_params(params: Any) -> dict[str, float]:
+def _serialize_monte_run_params(
+    params: Any,
+    currency_symbol: Any = DEFAULT_CURRENCY_SYMBOL,
+) -> dict[str, Any]:
     cash = float(params.cash)
     monthly_income = float(params.monthly_income)
     fixed_expenses = float(params.fixed_expenses)
@@ -1160,6 +1221,7 @@ def _serialize_monte_run_params(params: Any) -> dict[str, float]:
         "months": _legacy_int_attr("months", LEGACY_SIMULATION_MONTHS),
         "n_simulations": _legacy_int_attr("n_simulations", LEGACY_SIMULATION_PATHS),
         "income_delay_months": _legacy_int_attr("income_delay_months", 0),
+        CURRENCY_SYMBOL_FIELD: _normalize_currency_symbol(currency_symbol),
     }
 
 
@@ -1438,6 +1500,7 @@ def _apply_localized_lever_actions(
 def _build_ready_data(
     *,
     params: Any,
+    currency_symbol: Any,
     roast: Mapping[str, Any],
     simulation_result: Mapping[str, Any],
 ) -> dict[str, Any]:
@@ -1449,7 +1512,8 @@ def _build_ready_data(
 
     return {
         "status": "ready",
-        "params": _serialize_monte_run_params(params),
+        "params": _serialize_monte_run_params(params, currency_symbol),
+        CURRENCY_SYMBOL_FIELD: _normalize_currency_symbol(currency_symbol),
         "question": None,
         "verdict": normalized_roast["verdict"],
         "comment": normalized_roast["comment"],
@@ -1460,6 +1524,7 @@ def _build_ready_data(
 def _build_needs_clarification_data(extraction_result: Mapping[str, Any]) -> dict[str, Any]:
     comment = extraction_result.get("comment")
     question = extraction_result.get("question")
+    currency_symbol = _normalize_currency_symbol(extraction_result.get(CURRENCY_SYMBOL_FIELD))
 
     if not isinstance(comment, str) or not comment.strip():
         raise ApiProblem(
@@ -1482,6 +1547,7 @@ def _build_needs_clarification_data(extraction_result: Mapping[str, Any]) -> dic
     return {
         "status": "needs_clarification",
         "params": None,
+        CURRENCY_SYMBOL_FIELD: currency_symbol,
         "question": _clean_text(question),
         "comment": _clean_text(comment),
     }
@@ -1545,6 +1611,7 @@ def _call_groq(
         "income_delay_months": 0,
         "months": LEGACY_SIMULATION_MONTHS,
         "n_simulations": LEGACY_SIMULATION_PATHS,
+        CURRENCY_SYMBOL_FIELD: _normalize_currency_symbol(merged_params.get(CURRENCY_SYMBOL_FIELD)),
     }
 
     return {
@@ -1655,11 +1722,13 @@ class handler(BaseHTTPRequestHandler):
                         400,
                     )
 
+                currency_symbol = _normalize_currency_symbol(raw_params.get(CURRENCY_SYMBOL_FIELD))
                 monte_run_params = _build_monte_run_params(raw_params)
+                serialized_params = _serialize_monte_run_params(monte_run_params, currency_symbol)
                 simulation_result = _run_math_core(monte_run_params)
                 roast = _call_roast_stage(
                     user_text=user_text,
-                    extracted_params=_serialize_monte_run_params(monte_run_params),
+                    extracted_params=serialized_params,
                     simulation_result=simulation_result,
                 )
                 localized_simulation_result = _apply_localized_lever_actions(
@@ -1668,6 +1737,7 @@ class handler(BaseHTTPRequestHandler):
                 )
                 data = _build_ready_data(
                     params=monte_run_params,
+                    currency_symbol=currency_symbol,
                     roast=roast,
                     simulation_result=localized_simulation_result,
                 )
@@ -1675,7 +1745,7 @@ class handler(BaseHTTPRequestHandler):
                     telegram_user_id=telegram_user_id,
                     request_id=request_id,
                     source_text=user_text,
-                    params=_serialize_monte_run_params(monte_run_params),
+                    params=serialized_params,
                     simulation_data=localized_simulation_result,
                     telegram_context_row=telegram_context_row,
                     scenario_state_row=scenario_state_row,
