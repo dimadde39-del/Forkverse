@@ -1,7 +1,7 @@
 "use client";
 
 import type { FormEvent } from "react";
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   Area,
   CartesianGrid,
@@ -15,6 +15,9 @@ import {
 } from "recharts";
 
 import { getOgImagePath, getSharePagePath } from "@/app/lib/share-card";
+
+import WhatIfControls from "./WhatIfControls";
+import { useDebouncedSimulation } from "./useDebouncedSimulation";
 
 type FlowStatus = "idle" | "parsing" | "clarifying" | "simulating" | "simulated";
 
@@ -52,6 +55,15 @@ type SimulationParams = {
   months: number;
   n_simulations: number;
 };
+
+const simulationParamKeys = [
+  "initial_capital",
+  "monthly_burn",
+  "monthly_income",
+  "income_delay_months",
+  "months",
+  "n_simulations",
+] as const satisfies readonly (keyof SimulationParams)[];
 
 type ParseReady = {
   status: "ready";
@@ -235,6 +247,31 @@ function normalizeOptionalLevers(value: unknown): SimulationLever[] | null {
   }
 
   return levers.length > 0 ? levers : null;
+}
+
+function cloneSimulationParams(params: SimulationParams): SimulationParams {
+  return { ...params };
+}
+
+function sanitizeSimulationParams(params: SimulationParams): SimulationParams {
+  const months = Math.max(1, Math.round(params.months));
+
+  return {
+    initial_capital: Math.max(0, Math.round(params.initial_capital)),
+    monthly_burn: Math.max(0, Math.round(params.monthly_burn)),
+    monthly_income: Math.max(0, Math.round(params.monthly_income)),
+    income_delay_months: Math.min(months, Math.max(0, Math.round(params.income_delay_months))),
+    months,
+    n_simulations: Math.max(1, Math.min(4000, Math.round(params.n_simulations))),
+  };
+}
+
+function areSimulationParamsEqual(left: SimulationParams | null, right: SimulationParams | null): boolean {
+  if (!left || !right) {
+    return left === right;
+  }
+
+  return simulationParamKeys.every((key) => left[key] === right[key]);
 }
 
 function createMessage(role: ChatMessage["role"], content: string): ChatMessage {
@@ -477,6 +514,10 @@ const initialViewState: SimulatorViewState = {
 export default function SimulatorClient() {
   const [draft, setDraft] = useState("");
   const [viewState, setViewState] = useState<SimulatorViewState>(initialViewState);
+  // What-If controls mutate this state; parseData stays as the parser snapshot.
+  const [whatIfParams, setWhatIfParams] = useState<SimulationParams | null>(null);
+  const [whatIfBaselineParams, setWhatIfBaselineParams] = useState<SimulationParams | null>(null);
+  const [hasTouchedWhatIf, setHasTouchedWhatIf] = useState(false);
   const [copyFeedback, setCopyFeedback] = useState<"idle" | "copied" | "error">("idle");
   const { status, chatHistory, clarificationContext, parseData, simulationData, simulationMeta, errorMessage } =
     viewState;
@@ -661,7 +702,24 @@ export default function SimulatorClient() {
     return () => window.clearTimeout(timeoutId);
   }, [copyFeedback]);
 
-  const readyParams = parseData?.status === "ready" ? parseData.params : null;
+  useEffect(() => {
+    if (parseData?.status !== "ready") {
+      setWhatIfParams(null);
+      setWhatIfBaselineParams(null);
+      setHasTouchedWhatIf(false);
+      return;
+    }
+
+    const sanitizedParams = sanitizeSimulationParams(parseData.params);
+    setWhatIfParams(cloneSimulationParams(sanitizedParams));
+    setWhatIfBaselineParams(cloneSimulationParams(sanitizedParams));
+    setHasTouchedWhatIf(false);
+  }, [parseData]);
+
+  const parsedParams = parseData?.status === "ready" ? parseData.params : null;
+  const readyParams = whatIfParams ?? parsedParams;
+  const isWhatIfDirty =
+    Boolean(whatIfBaselineParams && readyParams) && !areSimulationParamsEqual(whatIfBaselineParams, readyParams);
   const isBusy = status === "parsing" || status === "simulating";
   const composerLabel = status === "clarifying" ? "Clarification" : "Scenario";
   const submitLabel =
@@ -672,6 +730,45 @@ export default function SimulatorClient() {
         : status === "simulating"
           ? "Simulating"
           : "Run simulation";
+
+  const handleWhatIfSuccess = useCallback((result: SimulationResponseData, meta: ApiMeta) => {
+    setViewState((current) => {
+      const previousSimulation = current.simulationData;
+
+      return {
+        ...current,
+        simulationData: {
+          ...result,
+          verdict: result.verdict ?? previousSimulation?.verdict ?? null,
+          comment: result.comment ?? previousSimulation?.comment ?? null,
+          levers: result.levers ?? previousSimulation?.levers ?? null,
+        },
+        simulationMeta: meta,
+        errorMessage: null,
+      };
+    });
+  }, []);
+
+  const handleWhatIfError = useCallback((error: { message: string }) => {
+    setViewState((current) => ({
+      ...current,
+      errorMessage: `WHAT-IF | ${error.message}`,
+    }));
+  }, []);
+
+  const whatIfSimulation = useDebouncedSimulation<SimulationParams, SimulationResponseData>({
+    params: hasTouchedWhatIf && whatIfParams ? whatIfParams : null,
+    enabled: status === "simulated" && hasTouchedWhatIf && whatIfParams !== null,
+    delayMs: 300,
+    normalizeResult: normalizeSimulationResponseData,
+    onSuccess: handleWhatIfSuccess,
+    onError: handleWhatIfError,
+  });
+
+  const handleWhatIfParamsChange = useCallback((nextParams: SimulationParams) => {
+    setHasTouchedWhatIf(true);
+    setWhatIfParams(sanitizeSimulationParams(nextParams));
+  }, []);
 
   async function handleCopyShareLink() {
     if (!shareLinks || typeof window === "undefined" || !navigator.clipboard) {
@@ -710,6 +807,12 @@ export default function SimulatorClient() {
     const userMessage = createMessage("user", parseInput);
 
     setDraft("");
+    if (!isClarificationReply) {
+      setWhatIfParams(null);
+      setWhatIfBaselineParams(null);
+      setHasTouchedWhatIf(false);
+    }
+
     setViewState((current) => ({
       ...current,
       status: "parsing",
@@ -803,7 +906,9 @@ export default function SimulatorClient() {
             <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
               <div className="rounded-3xl border border-white/10 bg-white/5 px-4 py-3 backdrop-blur-md">
                 <div className="text-[11px] uppercase tracking-[0.18em] text-white/46">State</div>
-                <div className="mt-2 font-mono text-sm text-white tabular-nums">{status.toUpperCase()}</div>
+                <div className="mt-2 font-mono text-sm text-white tabular-nums">
+                  {isWhatIfDirty ? "WHAT-IF" : status.toUpperCase()}
+                </div>
               </div>
               <div className="rounded-3xl border border-white/10 bg-white/5 px-4 py-3 backdrop-blur-md">
                 <div className="text-[11px] uppercase tracking-[0.18em] text-white/46">Messages</div>
@@ -875,6 +980,13 @@ export default function SimulatorClient() {
                 </div>
               ) : null}
             </div>
+
+            <WhatIfControls
+              disabled={status !== "simulated"}
+              loading={whatIfSimulation.isPending}
+              onChange={handleWhatIfParamsChange}
+              params={readyParams}
+            />
 
             <div className={`${panelClass} px-5 py-5 sm:px-6`}>
               <div className="mb-5">
@@ -970,7 +1082,18 @@ export default function SimulatorClient() {
                       </div>
                     </div>
 
-                    <div className="h-[320px] rounded-[28px] border border-white/10 bg-[radial-gradient(circle_at_top_left,rgba(16,185,129,0.10),transparent_32%),linear-gradient(180deg,rgba(255,255,255,0.04),rgba(255,255,255,0.01))] p-2 sm:h-[360px] lg:h-[420px]">
+                    <div className="relative h-[320px] overflow-hidden rounded-[28px] border border-white/10 bg-[radial-gradient(circle_at_top_left,rgba(16,185,129,0.10),transparent_32%),linear-gradient(180deg,rgba(255,255,255,0.04),rgba(255,255,255,0.01))] p-2 sm:h-[360px] lg:h-[420px]">
+                      {whatIfSimulation.isPending ? (
+                        <div
+                          aria-live="polite"
+                          className="absolute inset-0 z-10 grid place-items-center bg-black/36 backdrop-blur-[2px]"
+                        >
+                          <div className="inline-flex items-center gap-3 rounded-full border border-emerald-200/20 bg-black/52 px-4 py-2 font-mono text-[11px] uppercase tracking-[0.16em] text-emerald-100 shadow-[0_18px_60px_rgba(0,0,0,0.32)]">
+                            <span className="h-3 w-3 animate-spin rounded-full border border-emerald-100/80 border-t-transparent" />
+                            Recalculating
+                          </div>
+                        </div>
+                      ) : null}
                       <ResponsiveContainer width="100%" height="100%">
                         <ComposedChart data={chartData} margin={{ top: 12, right: 18, bottom: 8, left: 4 }}>
                           <defs>

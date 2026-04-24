@@ -9,6 +9,8 @@ from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler
 from typing import Any, Final
 
+import numpy as np
+
 
 SCHEMA_VERSION: Final[str] = "2026-04"
 MAX_PAYLOAD_BYTES: Final[int] = 1_000_000
@@ -35,6 +37,61 @@ def get_engine():
     from engine.monte_carlo import compute_metrics, simulate
 
     return simulate, compute_metrics
+
+
+def _first_month_median_depletes(paths: Any) -> float:
+    array = np.asarray(paths, dtype=np.float64)
+    if array.ndim != 2 or array.shape[1] < 2:
+        raise RuntimeError("paths must contain at least one month plus the initial state")
+
+    monthly_capital = array[:, 1:]
+    median_capital = np.median(monthly_capital, axis=0)
+    depleted_months = np.flatnonzero(median_capital <= 0.0)
+
+    if depleted_months.size == 0:
+        return float(monthly_capital.shape[1])
+
+    return float(depleted_months[0] + 1)
+
+
+def _survival_probability_at_month(paths: Any, month_number: int) -> float:
+    array = np.asarray(paths, dtype=np.float64)
+    if array.ndim != 2 or array.shape[1] < 2:
+        raise RuntimeError("paths must contain at least one month plus the initial state")
+
+    month_index = min(max(month_number, 1), array.shape[1] - 1)
+    return float(np.mean(array[:, month_index] > 0.0, dtype=np.float64) * 100.0)
+
+
+def _build_math_summary(paths: Any, params: dict[str, Any], simulate: Any) -> dict[str, Any]:
+    base_runway_months = _first_month_median_depletes(paths)
+    monthly_income = float(params["monthly_income"])
+    monthly_burn = float(params["monthly_burn"])
+
+    lever_specs: tuple[tuple[str, dict[str, float]], ...] = (
+        ("Cut monthly burn by 50%", {"monthly_burn": monthly_burn * 0.5}),
+        ("Increase monthly income by 20%", {"monthly_income": monthly_income * 1.2}),
+        ("Reduce monthly burn by 10%", {"monthly_burn": monthly_burn * 0.9}),
+    )
+    levers: list[dict[str, float | str]] = []
+
+    for action, patch in lever_specs:
+        lever_params = {**params, **patch}
+        lever_paths = simulate(**lever_params)
+        levers.append(
+            {
+                "action": action,
+                "impact_months": max(0.0, _first_month_median_depletes(lever_paths) - base_runway_months),
+            }
+        )
+
+    levers.sort(key=lambda item: (-float(item["impact_months"]), str(item["action"])))
+
+    return {
+        "base_runway_months": base_runway_months,
+        "survival_probability_12m": _survival_probability_at_month(paths, 12),
+        "levers": levers,
+    }
 
 
 def _utc_now_iso() -> str:
@@ -252,6 +309,8 @@ class handler(BaseHTTPRequestHandler):
         result = compute_metrics(paths)
         if not isinstance(result, dict):
             raise RuntimeError("compute_metrics() must return a JSON-serializable object")
+
+        result.update(_build_math_summary(paths, params, simulate))
 
         try:
             json.dumps(result)
