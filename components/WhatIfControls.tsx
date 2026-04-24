@@ -1,6 +1,6 @@
 "use client";
 
-import type { CSSProperties } from "react";
+import { useEffect, useState, type CSSProperties } from "react";
 
 export type WhatIfSimulationParams = {
   initial_capital: number;
@@ -50,9 +50,24 @@ const prefixMoneyFormatter = new Intl.NumberFormat("en-US", {
 });
 
 const PREFIX_CURRENCY_SYMBOLS = new Set(["$", "€", "£"]);
+const MAX_MONEY_PARAM = 1_000_000_000;
 
 function roundUpToStep(value: number, step: number): number {
   return Math.ceil(Math.max(value, step) / step) * step;
+}
+
+function getMoneySliderStep(value: number): number {
+  return value >= 100_000 ? 1_000 : 100;
+}
+
+function getMoneySliderConfig(minimumMax: number, ...values: number[]) {
+  const baseMax = Math.max(minimumMax, ...values);
+  const step = getMoneySliderStep(baseMax);
+
+  return {
+    max: roundUpToStep(baseMax, step),
+    step,
+  };
 }
 
 function isPrefixCurrencySymbol(currencySymbol: string): boolean {
@@ -81,6 +96,40 @@ function clampSliderValue(key: EditableParamKey, value: number, params: WhatIfSi
   return key === "income_delay_months" ? Math.min(rounded, params.months) : rounded;
 }
 
+function getManualInputMax(key: EditableParamKey, params: WhatIfSimulationParams): number {
+  return key === "income_delay_months" ? Math.max(0, Math.min(240, params.months)) : MAX_MONEY_PARAM;
+}
+
+function sanitizeManualInputValue(
+  key: EditableParamKey,
+  rawValue: string,
+  params: WhatIfSimulationParams,
+): number | null {
+  const normalizedValue = rawValue.replace(/[^\d.-]/g, "");
+
+  if (normalizedValue === "" || normalizedValue === "-" || normalizedValue === "." || normalizedValue === "-.") {
+    return null;
+  }
+
+  const parsedValue = Number(normalizedValue);
+
+  if (!Number.isFinite(parsedValue)) {
+    return null;
+  }
+
+  const roundedValue = Math.round(parsedValue);
+  return Math.min(Math.max(0, roundedValue), getManualInputMax(key, params));
+}
+
+function buildManualInputValues(params: WhatIfSimulationParams): Record<EditableParamKey, string> {
+  return {
+    initial_capital: String(params.initial_capital),
+    monthly_burn: String(params.monthly_burn),
+    monthly_income: String(params.monthly_income),
+    income_delay_months: String(params.income_delay_months),
+  };
+}
+
 function getSliderPercent(value: number, min: number, max: number): number {
   if (max <= min) {
     return 0;
@@ -90,9 +139,9 @@ function getSliderPercent(value: number, min: number, max: number): number {
 }
 
 function buildSliders(params: WhatIfSimulationParams): SliderDescriptor[] {
-  const capitalMax = roundUpToStep(Math.max(1_000_000, params.initial_capital * 2), 50_000);
-  const burnMax = roundUpToStep(Math.max(100_000, params.monthly_burn * 2, params.monthly_income), 25_000);
-  const incomeMax = roundUpToStep(Math.max(100_000, params.monthly_income * 2, params.monthly_burn), 25_000);
+  const capitalSlider = getMoneySliderConfig(1_000_000, params.initial_capital * 2);
+  const incomeSlider = getMoneySliderConfig(100_000, params.monthly_income * 2, params.monthly_burn);
+  const burnSlider = getMoneySliderConfig(100_000, params.monthly_burn * 2, params.monthly_income);
   const delayMax = Math.max(0, Math.min(240, params.months));
 
   return [
@@ -101,8 +150,8 @@ function buildSliders(params: WhatIfSimulationParams): SliderDescriptor[] {
       label: "Initial capital",
       eyebrow: "cash now",
       min: 0,
-      max: capitalMax,
-      step: 50_000,
+      max: capitalSlider.max,
+      step: capitalSlider.step,
       formatValue: formatCurrency,
     },
     {
@@ -110,8 +159,8 @@ function buildSliders(params: WhatIfSimulationParams): SliderDescriptor[] {
       label: "Monthly income",
       eyebrow: "after delay",
       min: 0,
-      max: incomeMax,
-      step: 25_000,
+      max: incomeSlider.max,
+      step: incomeSlider.step,
       formatValue: formatCurrency,
     },
     {
@@ -119,8 +168,8 @@ function buildSliders(params: WhatIfSimulationParams): SliderDescriptor[] {
       label: "Monthly burn",
       eyebrow: "outflow",
       min: 0,
-      max: burnMax,
-      step: 25_000,
+      max: burnSlider.max,
+      step: burnSlider.step,
       formatValue: formatCurrency,
     },
     {
@@ -147,6 +196,32 @@ export default function WhatIfControls({
   const controlsDisabled = disabled || params === null;
   const sliders = buildSliders(currentParams);
   const netAfterIncome = currentParams.monthly_income - currentParams.monthly_burn;
+  const [activeInputKey, setActiveInputKey] = useState<EditableParamKey | null>(null);
+  const [manualInputValues, setManualInputValues] = useState<Record<EditableParamKey, string>>(() =>
+    buildManualInputValues(currentParams),
+  );
+
+  useEffect(() => {
+    setManualInputValues((previousValues) => {
+      const nextValues = buildManualInputValues(currentParams);
+
+      if (!activeInputKey) {
+        return nextValues;
+      }
+
+      return {
+        ...nextValues,
+        [activeInputKey]: previousValues[activeInputKey],
+      };
+    });
+  }, [
+    activeInputKey,
+    currentParams.initial_capital,
+    currentParams.monthly_burn,
+    currentParams.monthly_income,
+    currentParams.income_delay_months,
+    currentParams.months,
+  ]);
 
   function handleSliderChange(key: EditableParamKey, value: number) {
     if (!params || controlsDisabled) {
@@ -157,6 +232,50 @@ export default function WhatIfControls({
       ...params,
       [key]: clampSliderValue(key, value, params),
     });
+  }
+
+  function handleManualInputChange(key: EditableParamKey, rawValue: string) {
+    if (!params || controlsDisabled) {
+      return;
+    }
+
+    setManualInputValues((previousValues) => ({
+      ...previousValues,
+      [key]: rawValue,
+    }));
+
+    const sanitizedValue = sanitizeManualInputValue(key, rawValue, params);
+
+    if (sanitizedValue === null) {
+      return;
+    }
+
+    onChange({
+      ...params,
+      [key]: sanitizedValue,
+    });
+  }
+
+  function handleManualInputBlur(key: EditableParamKey) {
+    setActiveInputKey(null);
+
+    if (!params) {
+      return;
+    }
+
+    const sanitizedValue = sanitizeManualInputValue(key, manualInputValues[key], params) ?? 0;
+
+    setManualInputValues((previousValues) => ({
+      ...previousValues,
+      [key]: String(sanitizedValue),
+    }));
+
+    if (!controlsDisabled && sanitizedValue !== params[key]) {
+      onChange({
+        ...params,
+        [key]: sanitizedValue,
+      });
+    }
   }
 
   return (
@@ -213,15 +332,30 @@ export default function WhatIfControls({
 
             return (
               <label key={slider.key} className="block border-t border-white/10 pt-4 first:border-t-0 first:pt-0">
-                <div className="mb-3 flex items-start justify-between gap-4">
+                <div className="mb-3 flex flex-wrap items-start justify-between gap-3">
                   <span className="min-w-0">
                     <span className="block text-sm font-medium text-white">{slider.label}</span>
                     <span className="mt-1 block text-[10px] uppercase tracking-[0.18em] text-white/38">
                       {slider.eyebrow}
                     </span>
                   </span>
-                  <span className="shrink-0 rounded-full border border-white/10 bg-white/5 px-3 py-1 font-mono text-[12px] text-emerald-100 tabular-nums">
-                    {slider.formatValue(value, currencySymbol)}
+                  <span className="ml-auto flex shrink-0 items-center gap-2">
+                    <span className="rounded-full border border-white/10 bg-white/5 px-3 py-1 font-mono text-[12px] text-emerald-100 tabular-nums">
+                      {slider.formatValue(value, currencySymbol)}
+                    </span>
+                    <input
+                      aria-label={`${slider.label} precise value`}
+                      className="what-if-number h-8 w-[7.5rem] rounded-full border border-white/12 bg-black/24 px-3 text-right font-mono text-[12px] text-white/88 shadow-[inset_0_1px_0_rgba(255,255,255,0.04)] outline-none transition placeholder:text-white/24 focus:border-emerald-200/70 focus:bg-black/36 focus:text-emerald-50 focus:shadow-[0_0_0_3px_rgba(16,185,129,0.11)] disabled:cursor-not-allowed disabled:opacity-50 sm:w-[8.5rem]"
+                      disabled={controlsDisabled}
+                      inputMode="numeric"
+                      max={getManualInputMax(slider.key, currentParams)}
+                      min={0}
+                      onBlur={() => handleManualInputBlur(slider.key)}
+                      onChange={(event) => handleManualInputChange(slider.key, event.currentTarget.value)}
+                      onFocus={() => setActiveInputKey(slider.key)}
+                      type="text"
+                      value={manualInputValues[slider.key]}
+                    />
                   </span>
                 </div>
 
@@ -307,6 +441,16 @@ export default function WhatIfControls({
           box-shadow:
             0 0 0 5px rgba(16, 185, 129, 0.1),
             0 0 28px rgba(16, 185, 129, 0.4);
+        }
+
+        .what-if-number {
+          appearance: textfield;
+        }
+
+        .what-if-number::-webkit-outer-spin-button,
+        .what-if-number::-webkit-inner-spin-button {
+          appearance: none;
+          margin: 0;
         }
       `}</style>
     </section>
