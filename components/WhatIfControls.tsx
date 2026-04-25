@@ -51,6 +51,7 @@ const prefixMoneyFormatter = new Intl.NumberFormat("en-US", {
 
 const PREFIX_CURRENCY_SYMBOLS = new Set(["$", "€", "£"]);
 const MAX_MONEY_PARAM = 1_000_000_000;
+const MAX_INCOME_DELAY_MONTHS = 12;
 
 function roundUpToStep(value: number, step: number): number {
   return Math.ceil(Math.max(value, step) / step) * step;
@@ -93,11 +94,11 @@ function formatDelayMonths(value: number): string {
 
 function clampSliderValue(key: EditableParamKey, value: number, params: WhatIfSimulationParams): number {
   const rounded = Math.max(0, Math.round(value));
-  return key === "income_delay_months" ? Math.min(rounded, params.months) : rounded;
+  return key === "income_delay_months" ? Math.min(rounded, params.months, MAX_INCOME_DELAY_MONTHS) : rounded;
 }
 
 function getManualInputMax(key: EditableParamKey, params: WhatIfSimulationParams): number {
-  return key === "income_delay_months" ? Math.max(0, Math.min(240, params.months)) : MAX_MONEY_PARAM;
+  return key === "income_delay_months" ? Math.max(0, Math.min(MAX_INCOME_DELAY_MONTHS, params.months)) : MAX_MONEY_PARAM;
 }
 
 function sanitizeManualInputValue(
@@ -142,7 +143,7 @@ function buildSliders(params: WhatIfSimulationParams): SliderDescriptor[] {
   const capitalSlider = getMoneySliderConfig(1_000_000, params.initial_capital * 2);
   const incomeSlider = getMoneySliderConfig(100_000, params.monthly_income * 2, params.monthly_burn);
   const burnSlider = getMoneySliderConfig(100_000, params.monthly_burn * 2, params.monthly_income);
-  const delayMax = Math.max(0, Math.min(240, params.months));
+  const delayMax = Math.max(0, Math.min(MAX_INCOME_DELAY_MONTHS, params.months));
 
   return [
     {
@@ -174,7 +175,7 @@ function buildSliders(params: WhatIfSimulationParams): SliderDescriptor[] {
     },
     {
       key: "income_delay_months",
-      label: "Income delay",
+      label: "Задержка дохода (мес) / Income Delay (months)",
       eyebrow: "timing",
       min: 0,
       max: delayMax,
@@ -344,7 +345,11 @@ export default function WhatIfControls({
                       {slider.formatValue(value, currencySymbol)}
                     </span>
                     <input
-                      aria-label={`${slider.label} precise value`}
+                      aria-label={
+                        slider.key === "income_delay_months"
+                          ? "Задержка дохода (мес) / Income Delay (months) precise value"
+                          : `${slider.label} precise value`
+                      }
                       className="what-if-number h-8 w-[7.5rem] rounded-full border border-white/12 bg-black/24 px-3 text-right font-mono text-[12px] text-white/88 shadow-[inset_0_1px_0_rgba(255,255,255,0.04)] outline-none transition placeholder:text-white/24 focus:border-emerald-200/70 focus:bg-black/36 focus:text-emerald-50 focus:shadow-[0_0_0_3px_rgba(16,185,129,0.11)] disabled:cursor-not-allowed disabled:opacity-50 sm:w-[8.5rem]"
                       disabled={controlsDisabled}
                       inputMode="numeric"

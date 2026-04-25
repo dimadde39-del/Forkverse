@@ -27,6 +27,7 @@ class MonteRunParams:
     monthly_income: float
     fixed_expenses: float
     flexible_expenses: float
+    income_delay_months: int = 0
 
 
 def _as_float(name: str, value: Any, minimum: float | None = None) -> float:
@@ -73,6 +74,7 @@ def _validate_params(params: MonteRunParams) -> MonteRunParams:
         monthly_income=_as_float("monthly_income", params.monthly_income, minimum=0.0),
         fixed_expenses=_as_float("fixed_expenses", params.fixed_expenses, minimum=0.0),
         flexible_expenses=_as_float("flexible_expenses", params.flexible_expenses, minimum=0.0),
+        income_delay_months=_as_int("income_delay_months", params.income_delay_months, minimum=0),
     )
 
 
@@ -164,6 +166,7 @@ def _compute_levers(
     income_noise: np.ndarray,
     flexible_noise: np.ndarray,
     base_runway_months: float,
+    income_delay_months: int = 0,
 ) -> list[dict[str, float | str]]:
     levers = [
         {
@@ -174,6 +177,7 @@ def _compute_levers(
                         lever_params,
                         income_noise=income_noise,
                         flexible_noise=flexible_noise,
+                        income_delay_months=income_delay_months,
                     )
                 )
                 - base_runway_months
@@ -198,6 +202,7 @@ def run_simulation(params: MonteRunParams) -> dict[str, Any]:
         validated_params,
         income_noise=income_noise,
         flexible_noise=flexible_noise,
+        income_delay_months=validated_params.income_delay_months,
     )
     base_runway_months = _first_month_median_depletes(base_paths)
     survival_probability_12m = _survival_probability_at_month(base_paths, 12)
@@ -206,6 +211,7 @@ def run_simulation(params: MonteRunParams) -> dict[str, Any]:
         income_noise=income_noise,
         flexible_noise=flexible_noise,
         base_runway_months=base_runway_months,
+        income_delay_months=validated_params.income_delay_months,
     )
 
     return {
@@ -239,7 +245,6 @@ def simulate(
         "income_delay_months",
         income_delay_months,
         minimum=0,
-        maximum=months_value,
     )
     seed_value = DEFAULT_SEED if seed is None else _as_int("seed", seed, minimum=0)
 
@@ -248,6 +253,7 @@ def simulate(
         monthly_income=monthly_income_value,
         fixed_expenses=monthly_burn_value,
         flexible_expenses=0.0,
+        income_delay_months=income_delay_months_value,
     )
     validated_params = _validate_params(params)
     income_noise, flexible_noise = _generate_noise(

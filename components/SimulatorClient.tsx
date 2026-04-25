@@ -56,6 +56,8 @@ type SimulationParams = {
   n_simulations: number;
 };
 
+const MAX_INCOME_DELAY_MONTHS = 12;
+
 const simulationParamKeys = [
   "initial_capital",
   "monthly_burn",
@@ -268,7 +270,7 @@ function sanitizeSimulationParams(params: SimulationParams): SimulationParams {
     initial_capital: Math.max(0, Math.round(params.initial_capital)),
     monthly_burn: Math.max(0, Math.round(params.monthly_burn)),
     monthly_income: Math.max(0, Math.round(params.monthly_income)),
-    income_delay_months: Math.min(months, Math.max(0, Math.round(params.income_delay_months))),
+    income_delay_months: Math.min(MAX_INCOME_DELAY_MONTHS, months, Math.max(0, Math.round(params.income_delay_months))),
     months,
     n_simulations: Math.max(1, Math.min(4000, Math.round(params.n_simulations))),
   };

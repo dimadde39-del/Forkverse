@@ -56,6 +56,7 @@ MONTE_RUN_PARAM_FIELDS: Final[tuple[str, ...]] = (
     "fixed_expenses",
     "flexible_expenses",
 )
+INCOME_DELAY_MONTHS_FIELD: Final[str] = "income_delay_months"
 CURRENCY_SYMBOL_FIELD: Final[str] = "currency_symbol"
 DEFAULT_CURRENCY_SYMBOL: Final[str] = "$"
 LEGACY_SIMULATION_MONTHS: Final[int] = 24
@@ -63,11 +64,12 @@ LEGACY_SIMULATION_PATHS: Final[int] = 1_000
 
 EXTRACTION_SYSTEM_PROMPT: Final[str] = """
 Ты — MonteRun Extraction Layer.
-Твоя задача: вытащить из текста пользователя 4 поля для MonteRunParams:
+Твоя задача: вытащить из текста пользователя 5 полей для MonteRunParams:
 - cash
 - monthly_income
 - fixed_expenses
 - flexible_expenses
+- income_delay_months
 
 Верни строго JSON-объект и ничего кроме JSON.
 
@@ -79,6 +81,7 @@ EXTRACTION_SYSTEM_PROMPT: Final[str] = """
     "monthly_income": number,
     "fixed_expenses": number,
     "flexible_expenses": number,
+    "income_delay_months": integer,
     "currency_symbol": string
   },
   "question": null,
@@ -93,6 +96,7 @@ EXTRACTION_SYSTEM_PROMPT: Final[str] = """
     "monthly_income": number | null,
     "fixed_expenses": number | null,
     "flexible_expenses": number | null,
+    "income_delay_months": integer,
     "currency_symbol": string
   },
   "question": "один короткий вопрос по самому блокирующему полю",
@@ -102,6 +106,8 @@ EXTRACTION_SYSTEM_PROMPT: Final[str] = """
 Правила:
 - Используй BASE_CONTEXT_JSON как доверенную память, если он передан.
 - Если в USER_MESSAGE есть явное новое число, оно важнее контекста.
+- Extract how many months the user will wait before getting their first income. Default is 0.
+- Do not ask clarification only because income_delay_months is absent; use 0.
 - Detect the currency used in the text and return its symbol (e.g., '$', '€', '£', '₸'). If no currency is mentioned, default to '$'.
 - LANGUAGE RULE: Определи язык USER_MESSAGE. Ты ОБЯЗАН писать поля comment и question в ТОЧНО ТОМ ЖЕ ЯЗЫКЕ, что и USER_MESSAGE. Если пользователь пишет по-английски, отвечай по-английски. Если по-испански, отвечай по-испански. Всегда сохраняй холодный, циничный, финансово-терминальный тон независимо от языка.
 - Не выдумывай цифры. Если поля нет даже после BASE_CONTEXT_JSON, верни needs_clarification.
@@ -307,6 +313,30 @@ def _coerce_non_negative_float(
         )
 
     return float(numeric_value)
+
+
+def _coerce_non_negative_int(
+    name: str,
+    value: Any,
+    *,
+    stage: str,
+    default: int = 0,
+) -> int:
+    if value is None:
+        return default
+
+    numeric_value = _coerce_non_negative_float(name, value, stage=stage)
+    integer_value = int(numeric_value)
+    if numeric_value != float(integer_value):
+        raise ApiProblem(
+            "INVALID_PARAMS",
+            f"DeepSeek {stage} returned invalid MonteRun inputs",
+            {"stage": stage, "field": name, "reason": "non_integer_value"},
+            False,
+            400,
+        )
+
+    return integer_value
 
 
 def _normalize_currency_symbol(value: Any) -> str:
@@ -802,6 +832,8 @@ def _extract_base_params_snapshot(parser_context_payload: Mapping[str, Any] | st
             for field in MONTE_RUN_PARAM_FIELDS
             if base_params.get(field) is not None
         }
+        if base_params.get(INCOME_DELAY_MONTHS_FIELD) is not None:
+            snapshot[INCOME_DELAY_MONTHS_FIELD] = base_params[INCOME_DELAY_MONTHS_FIELD]
         if base_params.get(CURRENCY_SYMBOL_FIELD) is not None:
             snapshot[CURRENCY_SYMBOL_FIELD] = base_params[CURRENCY_SYMBOL_FIELD]
         return snapshot
@@ -813,6 +845,8 @@ def _extract_base_params_snapshot(parser_context_payload: Mapping[str, Any] | st
             for field in MONTE_RUN_PARAM_FIELDS
             if previous_scenario.get(field) is not None
         }
+        if previous_scenario.get(INCOME_DELAY_MONTHS_FIELD) is not None:
+            snapshot[INCOME_DELAY_MONTHS_FIELD] = previous_scenario[INCOME_DELAY_MONTHS_FIELD]
         if previous_scenario.get(CURRENCY_SYMBOL_FIELD) is not None:
             snapshot[CURRENCY_SYMBOL_FIELD] = previous_scenario[CURRENCY_SYMBOL_FIELD]
         return snapshot
@@ -1062,6 +1096,10 @@ def _extract_context_params(parser_input: str) -> dict[str, Any] | None:
             if value is not None:
                 params[field] = value
 
+        income_delay_months = candidate.get(INCOME_DELAY_MONTHS_FIELD)
+        if income_delay_months is not None:
+            params[INCOME_DELAY_MONTHS_FIELD] = income_delay_months
+
         currency_symbol = candidate.get(CURRENCY_SYMBOL_FIELD)
         if currency_symbol is not None:
             params[CURRENCY_SYMBOL_FIELD] = currency_symbol
@@ -1080,6 +1118,10 @@ def _merge_extracted_params(
             value = raw_params.get(field)
             if value is not None:
                 merged[field] = value
+
+        income_delay_months = raw_params.get(INCOME_DELAY_MONTHS_FIELD)
+        if income_delay_months is not None:
+            merged[INCOME_DELAY_MONTHS_FIELD] = income_delay_months
 
         currency_symbol = raw_params.get(CURRENCY_SYMBOL_FIELD)
         if currency_symbol is not None:
@@ -1134,6 +1176,12 @@ def _normalize_extraction_payload(
             field: _coerce_non_negative_float(field, merged_params[field], stage="extraction")
             for field in MONTE_RUN_PARAM_FIELDS
         }
+        normalized_params[INCOME_DELAY_MONTHS_FIELD] = _coerce_non_negative_int(
+            INCOME_DELAY_MONTHS_FIELD,
+            merged_params.get(INCOME_DELAY_MONTHS_FIELD),
+            stage="extraction",
+            default=0,
+        )
         normalized_params[CURRENCY_SYMBOL_FIELD] = currency_symbol
         return {
             "status": "ready",
@@ -1150,6 +1198,12 @@ def _normalize_extraction_payload(
             field: merged_params.get(field)
             for field in MONTE_RUN_PARAM_FIELDS
         }
+        clarification_params[INCOME_DELAY_MONTHS_FIELD] = _coerce_non_negative_int(
+            INCOME_DELAY_MONTHS_FIELD,
+            merged_params.get(INCOME_DELAY_MONTHS_FIELD),
+            stage="extraction",
+            default=0,
+        )
         clarification_params[CURRENCY_SYMBOL_FIELD] = currency_symbol
 
     return {
@@ -1242,6 +1296,12 @@ def _build_monte_run_params(raw_params: Mapping[str, Any]) -> Any:
         monthly_income=_coerce_non_negative_float("monthly_income", raw_params.get("monthly_income"), stage="extraction"),
         fixed_expenses=_coerce_non_negative_float("fixed_expenses", raw_params.get("fixed_expenses"), stage="extraction"),
         flexible_expenses=_coerce_non_negative_float("flexible_expenses", raw_params.get("flexible_expenses"), stage="extraction"),
+        income_delay_months=_coerce_non_negative_int(
+            INCOME_DELAY_MONTHS_FIELD,
+            raw_params.get(INCOME_DELAY_MONTHS_FIELD),
+            stage="extraction",
+            default=0,
+        ),
     )
 
 
@@ -1337,6 +1397,7 @@ def _run_math_core(params: Any) -> dict[str, Any]:
             monthly_burn=params.fixed_expenses + params.flexible_expenses,
             months=LEGACY_SIMULATION_MONTHS,
             n_simulations=LEGACY_SIMULATION_PATHS,
+            income_delay_months=getattr(params, INCOME_DELAY_MONTHS_FIELD, 0),
         )
         chart_data = compute_metrics(paths)
         raw_result.update(chart_data)
@@ -1608,7 +1669,12 @@ def _call_groq(
         "initial_capital": int(round(float(merged_params["cash"]))),
         "monthly_burn": int(round(float(merged_params["fixed_expenses"]) + float(merged_params["flexible_expenses"]))),
         "monthly_income": int(round(float(merged_params["monthly_income"]))),
-        "income_delay_months": 0,
+        "income_delay_months": _coerce_non_negative_int(
+            INCOME_DELAY_MONTHS_FIELD,
+            merged_params.get(INCOME_DELAY_MONTHS_FIELD),
+            stage="extraction",
+            default=0,
+        ),
         "months": LEGACY_SIMULATION_MONTHS,
         "n_simulations": LEGACY_SIMULATION_PATHS,
         CURRENCY_SYMBOL_FIELD: _normalize_currency_symbol(merged_params.get(CURRENCY_SYMBOL_FIELD)),
