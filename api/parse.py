@@ -85,7 +85,14 @@ EXTRACTION_SYSTEM_PROMPT: Final[str] = """
     "currency_symbol": string
   },
   "question": null,
-  "comment": "короткая сухая строка"
+  "comment": "короткая сухая строка",
+  "assumptions": [
+    {
+      "text": "самое слабое/оптимистичное утверждение пользователя",
+      "risk": "High risk: B2B sales usually take 90+ days",
+      "suggested_stress": { "target": "income_delay", "value": 3 }
+    }
+  ]
 }
 
 Формат NEEDS_CLARIFICATION:
@@ -100,7 +107,8 @@ EXTRACTION_SYSTEM_PROMPT: Final[str] = """
     "currency_symbol": string
   },
   "question": "один короткий вопрос по самому блокирующему полю",
-  "comment": "короткая сухая строка о том, чего не хватает"
+  "comment": "короткая сухая строка о том, чего не хватает",
+  "assumptions": []
 }
 
 Правила:
@@ -108,6 +116,12 @@ EXTRACTION_SYSTEM_PROMPT: Final[str] = """
 - Если в USER_MESSAGE есть явное новое число, оно важнее контекста.
 - Extract how many months the user will wait before their first revenue. Default is 0.
 - Do not ask clarification only because income_delay_months is absent; use 0.
+- Optionally return assumptions as a top-level array. If no weak optimistic assumptions are visible, return [] or omit the field.
+- assumptions must contain 1-2 of the user's weakest optimistic assumptions, especially fast revenue and missing unexpected costs.
+- Each assumption must be { "text": string, "risk": string, "suggested_stress": { "target": string, "value": number } }.
+- For optimistic income timing, use suggested_stress.target = "income_delay" and a value like 3 for a 3-month delay.
+- For missing unexpected costs, use suggested_stress.target = "fixed_expenses" or "flexible_expenses" with a concrete non-negative stress value from the plan context when possible. Do not invent fake current params.
+- assumptions are parser notes only. Never change params to include the stress; MonteRun math will remain deterministic.
 - Detect the currency used in the text and return its symbol (e.g., '$', '€', '£', '₸'). If no currency is mentioned, default to '$'.
 - LANGUAGE RULE: Определи язык USER_MESSAGE. Ты ОБЯЗАН писать поля comment и question в ТОЧНО ТОМ ЖЕ ЯЗЫКЕ, что и USER_MESSAGE. Если пользователь пишет по-английски, отвечай по-английски. Если по-испански, отвечай по-испански. Всегда сохраняй холодный, циничный, финансово-терминальный тон независимо от языка.
 - Не выдумывай цифры. Если поля нет даже после BASE_CONTEXT_JSON, верни needs_clarification.
@@ -1141,6 +1155,59 @@ def _build_clarification_question(missing_fields: list[str]) -> str:
     return FIELD_QUESTIONS[missing_fields[0]]
 
 
+def _normalize_assumptions(value: Any) -> list[dict[str, Any]]:
+    if not isinstance(value, list):
+        return []
+
+    assumptions: list[dict[str, Any]] = []
+    for item in value:
+        if not isinstance(item, Mapping):
+            continue
+
+        text = item.get("text")
+        risk = item.get("risk")
+        suggested_stress = item.get("suggested_stress")
+        if (
+            not isinstance(text, str)
+            or not text.strip()
+            or not isinstance(risk, str)
+            or not risk.strip()
+            or not isinstance(suggested_stress, Mapping)
+        ):
+            continue
+
+        target = suggested_stress.get("target")
+        if not isinstance(target, str) or not target.strip():
+            continue
+
+        try:
+            stress_value = (
+                _parse_numeric_string(suggested_stress["value"])
+                if isinstance(suggested_stress.get("value"), str)
+                else float(suggested_stress["value"])
+            )
+        except (KeyError, TypeError, ValueError):
+            continue
+
+        if not np.isfinite(stress_value) or stress_value < 0.0:
+            continue
+
+        assumptions.append(
+            {
+                "text": _clean_text(text),
+                "risk": _clean_text(risk),
+                "suggested_stress": {
+                    "target": _clean_text(target),
+                    "value": stress_value,
+                },
+            }
+        )
+        if len(assumptions) == 2:
+            break
+
+    return assumptions
+
+
 def _normalize_extraction_payload(
     payload: dict[str, Any],
     fallback_params: Mapping[str, Any] | None = None,
@@ -1170,6 +1237,7 @@ def _normalize_extraction_payload(
     merged_params = _merge_extracted_params(raw_params, fallback_params)
     currency_symbol = _normalize_currency_symbol(merged_params.get(CURRENCY_SYMBOL_FIELD))
     missing_fields = _missing_param_fields(merged_params)
+    assumptions = _normalize_assumptions(payload.get("assumptions"))
 
     if not missing_fields:
         normalized_params = {
@@ -1183,12 +1251,15 @@ def _normalize_extraction_payload(
             default=0,
         )
         normalized_params[CURRENCY_SYMBOL_FIELD] = currency_symbol
-        return {
+        result = {
             "status": "ready",
             "params": normalized_params,
             "question": None,
             "comment": cleaned_comment,
         }
+        if assumptions:
+            result["assumptions"] = assumptions
+        return result
 
     question = payload.get("question")
     cleaned_question = _clean_text(question) if isinstance(question, str) and question.strip() else _build_clarification_question(missing_fields)
@@ -1206,13 +1277,16 @@ def _normalize_extraction_payload(
         )
         clarification_params[CURRENCY_SYMBOL_FIELD] = currency_symbol
 
-    return {
+    result = {
         "status": "needs_clarification",
         "params": clarification_params,
         CURRENCY_SYMBOL_FIELD: currency_symbol,
         "question": cleaned_question,
         "comment": cleaned_comment,
     }
+    if assumptions:
+        result["assumptions"] = assumptions
+    return result
 
 
 def _call_extraction_stage(parser_input: str) -> dict[str, Any]:
@@ -1605,13 +1679,17 @@ def _build_needs_clarification_data(extraction_result: Mapping[str, Any]) -> dic
             400,
         )
 
-    return {
+    result = {
         "status": "needs_clarification",
         "params": None,
         CURRENCY_SYMBOL_FIELD: currency_symbol,
         "question": _clean_text(question),
         "comment": _clean_text(comment),
     }
+    assumptions = extraction_result.get("assumptions")
+    if isinstance(assumptions, list) and assumptions:
+        result["assumptions"] = assumptions
+    return result
 
 
 def _extract_parser_text(parsed: Mapping[str, Any], field: str) -> str:
@@ -1680,12 +1758,16 @@ def _call_groq(
         CURRENCY_SYMBOL_FIELD: _normalize_currency_symbol(merged_params.get(CURRENCY_SYMBOL_FIELD)),
     }
 
-    return {
+    result = {
         "status": "ready",
         "params": legacy_params,
         "question": None,
         "comment": extracted["comment"],
     }
+    assumptions = extracted.get("assumptions")
+    if isinstance(assumptions, list) and assumptions:
+        result["assumptions"] = assumptions
+    return result
 
 
 def _run_simulation(
@@ -1807,6 +1889,9 @@ class handler(BaseHTTPRequestHandler):
                     roast=roast,
                     simulation_result=localized_simulation_result,
                 )
+                assumptions = extraction_result.get("assumptions")
+                if isinstance(assumptions, list) and assumptions:
+                    data["assumptions"] = assumptions
                 _persist_scenario_state(
                     telegram_user_id=telegram_user_id,
                     request_id=request_id,

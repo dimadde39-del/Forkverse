@@ -56,6 +56,19 @@ type SimulationParams = {
   n_simulations: number;
 };
 
+type AssumptionStress = {
+  target: string;
+  value: number;
+  label: string | null;
+};
+
+type ParserAssumption = {
+  id: string;
+  statement: string;
+  risk: string | null;
+  suggested_stress: AssumptionStress | null;
+};
+
 const MAX_INCOME_DELAY_MONTHS = 12;
 
 const simulationParamKeys = [
@@ -71,12 +84,14 @@ type ParseReady = {
   status: "ready";
   params: SimulationParams;
   currency_symbol: string;
+  assumptions?: ParserAssumption[] | null;
   question: null;
 };
 
 type ParseNeedsClarification = {
   status: "needs_clarification";
   params: null;
+  assumptions?: ParserAssumption[] | null;
   question: string;
 };
 
@@ -223,6 +238,19 @@ function normalizeOptionalNumberField(value: unknown): number | null {
   return isFiniteNumber(value) ? value : null;
 }
 
+function normalizeOptionalFiniteNumber(value: unknown): number | null {
+  if (isFiniteNumber(value)) {
+    return value;
+  }
+
+  if (typeof value !== "string") {
+    return null;
+  }
+
+  const parsed = Number(value.trim());
+  return isFiniteNumber(parsed) ? parsed : null;
+}
+
 function normalizeOptionalTextField(value: unknown): string | null {
   if (typeof value !== "string") {
     return null;
@@ -257,6 +285,82 @@ function normalizeOptionalLevers(value: unknown): SimulationLever[] | null {
   }
 
   return levers.length > 0 ? levers : null;
+}
+
+function normalizeOptionalAssumptions(value: unknown): ParserAssumption[] | null {
+  if (!Array.isArray(value)) {
+    return null;
+  }
+
+  const assumptions: ParserAssumption[] = [];
+
+  for (const [index, assumption] of value.entries()) {
+    if (typeof assumption === "string") {
+      const statement = normalizeOptionalTextField(assumption);
+      if (statement) {
+        assumptions.push({
+          id: `assumption-${index}-${statement}`,
+          statement,
+          risk: null,
+          suggested_stress: null,
+        });
+      }
+
+      continue;
+    }
+
+    if (!isRecord(assumption)) {
+      continue;
+    }
+
+    const statement =
+      normalizeOptionalTextField(assumption.statement) ??
+      normalizeOptionalTextField(assumption.assumption) ??
+      normalizeOptionalTextField(assumption.text) ??
+      normalizeOptionalTextField(assumption.label) ??
+      normalizeOptionalTextField(assumption.title);
+
+    if (!statement) {
+      continue;
+    }
+
+    const risk =
+      normalizeOptionalTextField(assumption.risk) ??
+      normalizeOptionalTextField(assumption.risk_level) ??
+      normalizeOptionalTextField(assumption.why_it_matters) ??
+      normalizeOptionalTextField(assumption.note);
+
+    let suggestedStress: AssumptionStress | null = null;
+    const suggestedStressValue = assumption.suggested_stress;
+    if (isRecord(suggestedStressValue)) {
+      const target = normalizeOptionalTextField(suggestedStressValue.target);
+      const stressValue = normalizeOptionalFiniteNumber(
+        suggestedStressValue.value ?? suggestedStressValue.suggested_value,
+      );
+
+      if (target && stressValue !== null) {
+        suggestedStress = {
+          target,
+          value: stressValue,
+          label: normalizeOptionalTextField(suggestedStressValue.label),
+        };
+      }
+    }
+
+    const explicitId =
+      normalizeOptionalTextField(assumption.id) ??
+      normalizeOptionalTextField(assumption.key) ??
+      `assumption-${index}-${statement}`;
+
+    assumptions.push({
+      id: explicitId,
+      statement,
+      risk,
+      suggested_stress: suggestedStress,
+    });
+  }
+
+  return assumptions.length > 0 ? assumptions : null;
 }
 
 function cloneSimulationParams(params: SimulationParams): SimulationParams {
@@ -479,6 +583,7 @@ function normalizeParseResponseData(value: unknown): ParseResponseData {
     return {
       status: "needs_clarification",
       params: null,
+      assumptions: normalizeOptionalAssumptions(value.assumptions),
       question: trimmedQuestion,
     };
   }
@@ -503,6 +608,7 @@ function normalizeParseResponseData(value: unknown): ParseResponseData {
       n_simulations: normalizeIntField(params.n_simulations, "n_simulations", 1, 4000),
     },
     currency_symbol: normalizeCurrencySymbol(value.currency_symbol ?? params.currency_symbol),
+    assumptions: normalizeOptionalAssumptions(value.assumptions),
     question: null,
   };
 }
@@ -560,9 +666,13 @@ export default function SimulatorClient() {
   const [whatIfBaselineParams, setWhatIfBaselineParams] = useState<SimulationParams | null>(null);
   const [hasTouchedWhatIf, setHasTouchedWhatIf] = useState(false);
   const [copyFeedback, setCopyFeedback] = useState<"idle" | "copied" | "error">("idle");
+  const [appliedAssumptionIds, setAppliedAssumptionIds] = useState<Set<string>>(() => new Set());
+  const [keptAssumptionIds, setKeptAssumptionIds] = useState<Set<string>>(() => new Set());
   const { status, chatHistory, clarificationContext, parseData, simulationData, simulationMeta, errorMessage } =
     viewState;
   const currencySymbol = parseData?.status === "ready" ? parseData.currency_symbol : "$";
+  const assumptionsUnderPressure =
+    parseData?.assumptions && parseData.assumptions.length > 0 ? parseData.assumptions : null;
 
   const rawSeriesKeys = useMemo(() => Array.from({ length: 50 }, (_, index) => `sim${index}` as SimKey), []);
 
@@ -749,6 +859,8 @@ export default function SimulatorClient() {
       setWhatIfParams(null);
       setWhatIfBaselineParams(null);
       setHasTouchedWhatIf(false);
+      setAppliedAssumptionIds(new Set());
+      setKeptAssumptionIds(new Set());
       return;
     }
 
@@ -756,6 +868,8 @@ export default function SimulatorClient() {
     setWhatIfParams(cloneSimulationParams(sanitizedParams));
     setWhatIfBaselineParams(cloneSimulationParams(sanitizedParams));
     setHasTouchedWhatIf(false);
+    setAppliedAssumptionIds(new Set());
+    setKeptAssumptionIds(new Set());
   }, [parseData]);
 
   const parsedParams = parseData?.status === "ready" ? parseData.params : null;
@@ -810,6 +924,54 @@ export default function SimulatorClient() {
   const handleWhatIfParamsChange = useCallback((nextParams: SimulationParams) => {
     setHasTouchedWhatIf(true);
     setWhatIfParams(sanitizeSimulationParams(nextParams));
+  }, []);
+
+  const handleApplyAssumptionStress = useCallback(
+    (assumption: ParserAssumption) => {
+      const stress = assumption.suggested_stress;
+      if (stress?.target !== "income_delay") {
+        return;
+      }
+
+      setHasTouchedWhatIf(true);
+      setWhatIfParams((currentParams) => {
+        const baseParams =
+          currentParams ?? (parseData?.status === "ready" ? sanitizeSimulationParams(parseData.params) : null);
+
+        if (!baseParams) {
+          return currentParams;
+        }
+
+        return sanitizeSimulationParams({
+          ...baseParams,
+          income_delay_months: stress.value,
+        });
+      });
+      setAppliedAssumptionIds((currentIds) => {
+        const nextIds = new Set(currentIds);
+        nextIds.add(assumption.id);
+        return nextIds;
+      });
+      setKeptAssumptionIds((currentIds) => {
+        const nextIds = new Set(currentIds);
+        nextIds.delete(assumption.id);
+        return nextIds;
+      });
+    },
+    [parseData],
+  );
+
+  const handleKeepAssumption = useCallback((assumptionId: string) => {
+    setKeptAssumptionIds((currentIds) => {
+      const nextIds = new Set(currentIds);
+      nextIds.add(assumptionId);
+      return nextIds;
+    });
+    setAppliedAssumptionIds((currentIds) => {
+      const nextIds = new Set(currentIds);
+      nextIds.delete(assumptionId);
+      return nextIds;
+    });
   }, []);
 
   async function handleCopyShareLink() {
@@ -1275,6 +1437,87 @@ export default function SimulatorClient() {
                           <div className="share-card__section-kicker">Verdict</div>
                           <p className="share-card__verdict-text">{shareCard.verdict}</p>
                         </section>
+
+                        {assumptionsUnderPressure ? (
+                          <section
+                            aria-label="Assumptions under pressure"
+                            className="rounded-[22px] border border-white/10 bg-[linear-gradient(135deg,rgba(239,68,68,0.12),rgba(255,255,255,0.025)_42%,rgba(16,185,129,0.08))] p-4 shadow-[inset_0_1px_0_rgba(255,255,255,0.05)] sm:p-5"
+                          >
+                            <div className="flex flex-col gap-2 border-b border-white/10 pb-4 sm:flex-row sm:items-end sm:justify-between">
+                              <div>
+                                <div className="share-card__section-kicker">Assumptions under pressure</div>
+                                <p className="mt-2 max-w-2xl text-sm leading-6 text-white/58">
+                                  Parser guesses stay visible. Stress them through What-If before the math gets blamed.
+                                </p>
+                              </div>
+                              <div className="rounded-full border border-red-300/20 bg-red-400/10 px-3 py-1.5 font-mono text-[11px] uppercase tracking-[0.16em] text-red-200">
+                                {assumptionsUnderPressure.length} at risk
+                              </div>
+                            </div>
+
+                            <div className="mt-4 grid gap-3">
+                              {assumptionsUnderPressure.map((assumption, index) => {
+                                const stress = assumption.suggested_stress;
+                                const canApplyStress = stress?.target === "income_delay";
+                                const isApplied = appliedAssumptionIds.has(assumption.id);
+                                const isKept = keptAssumptionIds.has(assumption.id);
+                                const stressLabel =
+                                  stress?.label ??
+                                  (canApplyStress ? `Income delay -> ${formatDelayMonths(stress.value)}` : null);
+
+                                return (
+                                  <article
+                                    key={assumption.id}
+                                    className="grid gap-4 rounded-[18px] border border-white/10 bg-black/26 p-4 sm:grid-cols-[minmax(0,1fr)_auto] sm:items-center"
+                                  >
+                                    <div className="min-w-0">
+                                      <div className="flex flex-wrap items-center gap-2">
+                                        <span className="rounded-full border border-red-300/20 bg-red-400/10 px-2.5 py-1 font-mono text-[10px] uppercase tracking-[0.16em] text-red-200">
+                                          Risk {String(index + 1).padStart(2, "0")}
+                                        </span>
+                                        {stressLabel ? (
+                                          <span className="rounded-full border border-white/10 bg-white/5 px-2.5 py-1 font-mono text-[10px] uppercase tracking-[0.14em] text-white/52">
+                                            {stressLabel}
+                                          </span>
+                                        ) : null}
+                                      </div>
+                                      <p className="mt-3 text-sm leading-6 text-white/86">{assumption.statement}</p>
+                                      {assumption.risk ? (
+                                        <p className="mt-2 text-[13px] leading-5 text-red-100/68">{assumption.risk}</p>
+                                      ) : null}
+                                    </div>
+
+                                    <div className="flex flex-wrap gap-2 sm:justify-end">
+                                      <button
+                                        className={
+                                          isApplied
+                                            ? "rounded-full border border-emerald-300/24 bg-emerald-400/14 px-3 py-2 text-xs font-medium text-emerald-200"
+                                            : "rounded-full border border-red-300/24 bg-red-400/12 px-3 py-2 text-xs font-medium text-red-100 transition hover:border-red-200/42 hover:bg-red-400/18 disabled:cursor-not-allowed disabled:border-white/10 disabled:bg-white/5 disabled:text-white/34"
+                                        }
+                                        disabled={!canApplyStress || isApplied}
+                                        onClick={() => handleApplyAssumptionStress(assumption)}
+                                        type="button"
+                                      >
+                                        {isApplied ? "Applied" : "Apply stress"}
+                                      </button>
+                                      <button
+                                        className={
+                                          isKept
+                                            ? "rounded-full border border-emerald-300/24 bg-emerald-400/14 px-3 py-2 text-xs font-medium text-emerald-200"
+                                            : "rounded-full border border-emerald-300/20 bg-emerald-400/8 px-3 py-2 text-xs font-medium text-emerald-100 transition hover:border-emerald-200/38 hover:bg-emerald-400/14"
+                                        }
+                                        onClick={() => handleKeepAssumption(assumption.id)}
+                                        type="button"
+                                      >
+                                        {isKept ? "Kept" : "Keep assumption"}
+                                      </button>
+                                    </div>
+                                  </article>
+                                );
+                              })}
+                            </div>
+                          </section>
+                        ) : null}
 
                         <section className="share-card__levers" aria-label="Fastest ways to extend survival">
                           <div className="share-card__section-kicker">Fastest ways to extend survival</div>
