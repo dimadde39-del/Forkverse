@@ -78,6 +78,7 @@ type DebouncedSimulationState<TParams extends SimulationRequestParams, TResult> 
 
 const DEFAULT_ENDPOINT = "/api/simulate";
 const DEFAULT_DELAY_MS = 300;
+const overloadedScenarioMessage = "Система перегружена анализом вашего сценария. Попробуйте описать план чуть короче.";
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -116,6 +117,14 @@ function normalizeApiError(value: unknown): SimulationApiError | null {
     details: normalizeDetails(value.details),
     retryable,
   };
+}
+
+function isOverloadedStatus(status: number | null | undefined): status is 502 | 504 {
+  return status === 502 || status === 504;
+}
+
+function getHttpFailureMessage(status: number): string {
+  return isOverloadedStatus(status) ? overloadedScenarioMessage : `Simulation request failed with HTTP ${status}`;
 }
 
 function toDebouncedError(
@@ -277,7 +286,7 @@ async function postSimulation<TResult, TParams extends SimulationRequestParams>(
     throw toDebouncedError(
       {
         code: "INTERNAL_ERROR",
-        message: `Simulation request failed with HTTP ${status}`,
+        message: getHttpFailureMessage(status),
         details: null,
         retryable: status >= 500,
       },

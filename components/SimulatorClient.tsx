@@ -17,7 +17,7 @@ import {
 import { getOgImagePath, getSharePagePath } from "@/app/lib/share-card";
 
 import WhatIfControls from "./WhatIfControls";
-import { useDebouncedSimulation } from "./useDebouncedSimulation";
+import { type DebouncedSimulationError, useDebouncedSimulation } from "./useDebouncedSimulation";
 
 type FlowStatus = "idle" | "parsing" | "clarifying" | "simulating" | "simulated";
 
@@ -181,9 +181,48 @@ const PREFIX_CURRENCY_SYMBOLS = new Set(["$", "€", "£"]);
 
 const panelClass =
   "rounded-[28px] border border-white/10 bg-white/5 shadow-[0_24px_80px_rgba(0,0,0,0.24)] backdrop-blur-md";
+const overloadedScenarioMessage = "Система перегружена анализом вашего сценария. Попробуйте описать план чуть короче.";
+
+class ApiRequestError extends Error {
+  readonly status: number;
+
+  constructor(status: number, message?: string) {
+    super(message ?? `Request failed with HTTP ${status}`);
+    this.name = "ApiRequestError";
+    this.status = status;
+  }
+}
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
+}
+
+function isOverloadedStatus(status: number | null | undefined): status is 502 | 504 {
+  return status === 502 || status === 504;
+}
+
+function isApiRequestError(value: unknown): value is ApiRequestError {
+  return value instanceof ApiRequestError;
+}
+
+function getFriendlyErrorMessage(error: unknown): string {
+  if (isApiRequestError(error) && isOverloadedStatus(error.status)) {
+    return overloadedScenarioMessage;
+  }
+
+  if (error instanceof Error) {
+    return error.message;
+  }
+
+  if (typeof error === "string") {
+    return error;
+  }
+
+  return "Не удалось обработать сценарий. Попробуйте еще раз.";
+}
+
+function getFriendlySimulationErrorMessage(error: Pick<DebouncedSimulationError, "message" | "status">): string {
+  return isOverloadedStatus(error.status) ? overloadedScenarioMessage : error.message;
 }
 
 function isFiniteNumber(value: unknown): value is number {
@@ -548,7 +587,7 @@ async function postEnvelope<TResponse>(url: string, payload: Record<string, unkn
   });
 
   if (!response.ok) {
-    throw new Error(`Request failed with HTTP ${response.status}`);
+    throw new ApiRequestError(response.status);
   }
 
   const json = (await response.json()) as unknown;
@@ -905,10 +944,10 @@ export default function SimulatorClient() {
     });
   }, []);
 
-  const handleWhatIfError = useCallback((error: { message: string }) => {
+  const handleWhatIfError = useCallback((error: DebouncedSimulationError) => {
     setViewState((current) => ({
       ...current,
-      errorMessage: `WHAT-IF | ${error.message}`,
+      errorMessage: getFriendlySimulationErrorMessage(error),
     }));
   }, []);
 
@@ -1099,14 +1138,12 @@ export default function SimulatorClient() {
       }));
     } catch (err) {
       console.error("[SimClient] LLM parse error:", err);
-      const errorMsg = err instanceof Error ? err.message : JSON.stringify(err, null, 2) ?? String(err);
-      const errorChatMessage = createMessage("ai", `ERROR | ${errorMsg}`);
+      const errorMsg = getFriendlyErrorMessage(err);
 
       setViewState((current) => ({
         ...current,
         status: fallbackStatus,
         errorMessage: errorMsg,
-        chatHistory: [...current.chatHistory, errorChatMessage],
       }));
     }
   }
@@ -1205,8 +1242,14 @@ export default function SimulatorClient() {
                 </div>
               </form>
               {errorMessage ? (
-                <div className="mt-4 rounded-3xl border border-white/10 bg-white/6 px-4 py-3 text-sm text-white/78">
-                  ERROR | {errorMessage}
+                <div
+                  className="mt-4 rounded-3xl border border-red-300/20 bg-[linear-gradient(180deg,rgba(248,113,113,0.16),rgba(127,29,29,0.16))] px-4 py-3 shadow-[0_18px_50px_rgba(127,29,29,0.22)]"
+                  role="alert"
+                >
+                  <div className="text-[11px] font-medium uppercase tracking-[0.2em] text-red-200/82">
+                    Scenario blocked
+                  </div>
+                  <div className="mt-2 text-sm leading-6 text-red-50/90">{errorMessage}</div>
                 </div>
               ) : null}
             </div>

@@ -71,6 +71,9 @@ EXTRACTION_SYSTEM_PROMPT: Final[str] = """
 - flexible_expenses
 - income_delay_months
 
+CRITICAL RULE:
+NEVER ask follow-up questions. NEVER enter a conversational loop. If exact numbers are missing, CALCULATE them from context (e.g., '3 clients for $2000' = $6000 monthly income) or make pessimistic assumptions. You MUST ALWAYS output the final JSON and nothing else.
+
 Верни строго JSON-объект и ничего кроме JSON.
 
 Формат READY:
@@ -95,25 +98,12 @@ EXTRACTION_SYSTEM_PROMPT: Final[str] = """
   ]
 }
 
-Формат NEEDS_CLARIFICATION:
-{
-  "status": "needs_clarification",
-  "params": {
-    "cash": number | null,
-    "monthly_income": number | null,
-    "fixed_expenses": number | null,
-    "flexible_expenses": number | null,
-    "income_delay_months": integer,
-    "currency_symbol": string
-  },
-  "question": "один короткий вопрос по самому блокирующему полю",
-  "comment": "короткая сухая строка о том, чего не хватает",
-  "assumptions": []
-}
-
 Правила:
+- Always return status = "ready" with final params. Do not return needs_clarification; that status exists only for legacy compatibility outside this prompt.
 - Используй BASE_CONTEXT_JSON как доверенную память, если он передан.
 - Если в USER_MESSAGE есть явное новое число, оно важнее контекста.
+- Calculate derived metrics instead of asking: multiply count * price, sum recurring cost categories, infer monthly amounts when text clearly says per month/monthly, use lower income ranges and upper expense ranges, and choose pessimistic defaults when unavoidable.
+- Keep stress values only inside assumptions[*].suggested_stress. Do not put stress values into params.
 - Extract how many months the user will wait before their first revenue. Default is 0.
 - Do not ask clarification only because income_delay_months is absent; use 0.
 - Optionally return assumptions as a top-level array. If no weak optimistic assumptions are visible, return [] or omit the field.
@@ -125,7 +115,7 @@ EXTRACTION_SYSTEM_PROMPT: Final[str] = """
 - assumptions are parser notes only. Never change params to include the stress; MonteRun math will remain deterministic.
 - Detect the currency used in the text and return its symbol (e.g., '$', '€', '£', '₸'). If no currency is mentioned, default to '$'.
 - LANGUAGE RULE: Определи язык USER_MESSAGE. Ты ОБЯЗАН писать поля comment и question в ТОЧНО ТОМ ЖЕ ЯЗЫКЕ, что и USER_MESSAGE. Если пользователь пишет по-английски, отвечай по-английски. Если по-испански, отвечай по-испански. Всегда сохраняй холодный, циничный, финансово-терминальный тон независимо от языка.
-- Не выдумывай цифры. Если поля нет даже после BASE_CONTEXT_JSON, верни needs_clarification.
+- If a field is not explicit even after BASE_CONTEXT_JSON, prefer a pessimistic, clearly finance-grounded default over clarification.
 - Все числа должны быть неотрицательными.
 - Если пользователь дал диапазон дохода, бери нижнюю границу.
 - Если пользователь дал диапазон расходов, бери верхнюю границу.
@@ -1149,6 +1139,46 @@ def _missing_param_fields(value: Mapping[str, Any]) -> list[str]:
     return [field for field in MONTE_RUN_PARAM_FIELDS if value.get(field) is None]
 
 
+def _extract_optional_non_negative_float(value: Any) -> float | None:
+    if value is None or isinstance(value, bool):
+        return None
+
+    try:
+        numeric_value = _parse_numeric_string(value) if isinstance(value, str) else float(value)
+    except (TypeError, ValueError):
+        return None
+
+    if not np.isfinite(numeric_value) or numeric_value < 0.0:
+        return None
+
+    return float(numeric_value)
+
+
+def _apply_pessimistic_param_defaults(value: Mapping[str, Any]) -> dict[str, Any]:
+    filled: dict[str, Any] = dict(value)
+
+    if filled.get("cash") is None:
+        filled["cash"] = 0.0
+    if filled.get("monthly_income") is None:
+        filled["monthly_income"] = 0.0
+
+    fixed_missing = filled.get("fixed_expenses") is None
+    flexible_missing = filled.get("flexible_expenses") is None
+
+    if fixed_missing and flexible_missing:
+        cash = _extract_optional_non_negative_float(filled.get("cash")) or 0.0
+        monthly_income = _extract_optional_non_negative_float(filled.get("monthly_income")) or 0.0
+        filled["fixed_expenses"] = max(monthly_income, cash / LEGACY_SIMULATION_MONTHS, 1.0)
+        filled["flexible_expenses"] = 0.0
+    else:
+        if fixed_missing:
+            filled["fixed_expenses"] = 0.0
+        if flexible_missing:
+            filled["flexible_expenses"] = 0.0
+
+    return filled
+
+
 def _build_clarification_question(missing_fields: list[str]) -> str:
     if not missing_fields:
         return "Что у тебя сейчас по cash, income и расходам?"
@@ -1240,49 +1270,25 @@ def _normalize_extraction_payload(
     missing_fields = _missing_param_fields(merged_params)
     assumptions = _normalize_assumptions(payload.get("assumptions"))
 
-    if not missing_fields:
-        normalized_params = {
-            field: _coerce_non_negative_float(field, merged_params[field], stage="extraction")
-            for field in MONTE_RUN_PARAM_FIELDS
-        }
-        normalized_params[INCOME_DELAY_MONTHS_FIELD] = _coerce_non_negative_int(
-            INCOME_DELAY_MONTHS_FIELD,
-            merged_params.get(INCOME_DELAY_MONTHS_FIELD),
-            stage="extraction",
-            default=0,
-        )
-        normalized_params[CURRENCY_SYMBOL_FIELD] = currency_symbol
-        result = {
-            "status": "ready",
-            "params": normalized_params,
-            "question": None,
-            "comment": cleaned_comment,
-        }
-        if assumptions:
-            result["assumptions"] = assumptions
-        return result
+    if missing_fields:
+        LOGGER.info("DeepSeek extraction omitted fields; applying pessimistic defaults: %s", missing_fields)
+        merged_params = _apply_pessimistic_param_defaults(merged_params)
 
-    question = payload.get("question")
-    cleaned_question = _clean_text(question) if isinstance(question, str) and question.strip() else _build_clarification_question(missing_fields)
-    clarification_params = None
-    if isinstance(raw_params, Mapping):
-        clarification_params = {
-            field: merged_params.get(field)
-            for field in MONTE_RUN_PARAM_FIELDS
-        }
-        clarification_params[INCOME_DELAY_MONTHS_FIELD] = _coerce_non_negative_int(
-            INCOME_DELAY_MONTHS_FIELD,
-            merged_params.get(INCOME_DELAY_MONTHS_FIELD),
-            stage="extraction",
-            default=0,
-        )
-        clarification_params[CURRENCY_SYMBOL_FIELD] = currency_symbol
-
+    normalized_params = {
+        field: _coerce_non_negative_float(field, merged_params[field], stage="extraction")
+        for field in MONTE_RUN_PARAM_FIELDS
+    }
+    normalized_params[INCOME_DELAY_MONTHS_FIELD] = _coerce_non_negative_int(
+        INCOME_DELAY_MONTHS_FIELD,
+        merged_params.get(INCOME_DELAY_MONTHS_FIELD),
+        stage="extraction",
+        default=0,
+    )
+    normalized_params[CURRENCY_SYMBOL_FIELD] = currency_symbol
     result = {
-        "status": "needs_clarification",
-        "params": clarification_params,
-        CURRENCY_SYMBOL_FIELD: currency_symbol,
-        "question": cleaned_question,
+        "status": "ready",
+        "params": normalized_params,
+        "question": None,
         "comment": cleaned_comment,
     }
     if assumptions:
@@ -1295,7 +1301,7 @@ def _call_extraction_stage(parser_input: str) -> dict[str, Any]:
         system_prompt=EXTRACTION_SYSTEM_PROMPT,
         user_content=parser_input,
         stage="extraction",
-        temperature=0.0,
+        temperature=0.1,
     )
     return _normalize_extraction_payload(raw_payload, _extract_context_params(parser_input))
 
