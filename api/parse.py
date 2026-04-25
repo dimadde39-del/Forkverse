@@ -28,7 +28,7 @@ PROJECT_ROOT: Final[Path] = Path(__file__).parent.parent.resolve()
 ENV_PATH: Final[Path] = PROJECT_ROOT / ".env"
 
 DEEPSEEK_BASE_URL: Final[str] = "https://api.deepseek.com/v1"
-DEEPSEEK_MODEL: Final[str] = "deepseek-chat"
+DEEPSEEK_MODEL: Final[str] = "deepseek-v4-flash"
 DEEPSEEK_API_KEY_ENV: Final[str] = "DEEPSEEK_API_KEY"
 
 SUPABASE_URL_ENV: Final[str] = "SUPABASE_URL"
@@ -117,6 +117,7 @@ EXTRACTION_SYSTEM_PROMPT: Final[str] = """
 - Extract how many months the user will wait before their first revenue. Default is 0.
 - Do not ask clarification only because income_delay_months is absent; use 0.
 - Optionally return assumptions as a top-level array. If no weak optimistic assumptions are visible, return [] or omit the field.
+- Critically analyze the user's plan. Find 1-2 weakest assumptions (e.g., fast sales, no unexpected costs) and suggest mathematical stress tests for the simulator levers.
 - assumptions must contain 1-2 of the user's weakest optimistic assumptions, especially fast revenue and missing unexpected costs.
 - Each assumption must be { "text": string, "risk": string, "suggested_stress": { "target": string, "value": number } }.
 - For optimistic income timing, use suggested_stress.target = "income_delay" and a value like 3 for a 3-month delay.

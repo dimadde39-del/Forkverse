@@ -961,18 +961,44 @@ export default function SimulatorClient() {
     [parseData],
   );
 
-  const handleKeepAssumption = useCallback((assumptionId: string) => {
+  const handleKeepAssumption = useCallback((assumption: ParserAssumption) => {
+    const stress = assumption.suggested_stress;
+    if (stress?.target === "income_delay") {
+      setHasTouchedWhatIf(true);
+      setWhatIfParams((currentParams) => {
+        const baselineParams =
+          whatIfBaselineParams ?? (parseData?.status === "ready" ? sanitizeSimulationParams(parseData.params) : null);
+        if (!currentParams || !baselineParams) {
+          return currentParams;
+        }
+
+        const stressedDelay = sanitizeSimulationParams({
+          ...baselineParams,
+          income_delay_months: stress.value,
+        }).income_delay_months;
+
+        if (currentParams.income_delay_months !== stressedDelay) {
+          return currentParams;
+        }
+
+        return sanitizeSimulationParams({
+          ...currentParams,
+          income_delay_months: baselineParams.income_delay_months,
+        });
+      });
+    }
+
     setKeptAssumptionIds((currentIds) => {
       const nextIds = new Set(currentIds);
-      nextIds.add(assumptionId);
+      nextIds.add(assumption.id);
       return nextIds;
     });
     setAppliedAssumptionIds((currentIds) => {
       const nextIds = new Set(currentIds);
-      nextIds.delete(assumptionId);
+      nextIds.delete(assumption.id);
       return nextIds;
     });
-  }, []);
+  }, [parseData, whatIfBaselineParams]);
 
   async function handleCopyShareLink() {
     if (!shareLinks || typeof window === "undefined" || !navigator.clipboard) {
@@ -1441,14 +1467,11 @@ export default function SimulatorClient() {
                         {assumptionsUnderPressure ? (
                           <section
                             aria-label="Assumptions under pressure"
-                            className="rounded-[22px] border border-white/10 bg-[linear-gradient(135deg,rgba(239,68,68,0.12),rgba(255,255,255,0.025)_42%,rgba(16,185,129,0.08))] p-4 shadow-[inset_0_1px_0_rgba(255,255,255,0.05)] sm:p-5"
+                            className="rounded-[18px] border border-red-400/22 bg-[linear-gradient(135deg,rgba(127,29,29,0.36),rgba(5,5,5,0.92)_46%,rgba(6,78,59,0.18))] p-4 shadow-[inset_0_1px_0_rgba(239,68,68,0.10),0_18px_70px_rgba(127,29,29,0.16)] sm:p-5"
                           >
                             <div className="flex flex-col gap-2 border-b border-white/10 pb-4 sm:flex-row sm:items-end sm:justify-between">
                               <div>
                                 <div className="share-card__section-kicker">Assumptions under pressure</div>
-                                <p className="mt-2 max-w-2xl text-sm leading-6 text-white/58">
-                                  Parser guesses stay visible. Stress them through What-If before the math gets blamed.
-                                </p>
                               </div>
                               <div className="rounded-full border border-red-300/20 bg-red-400/10 px-3 py-1.5 font-mono text-[11px] uppercase tracking-[0.16em] text-red-200">
                                 {assumptionsUnderPressure.length} at risk
@@ -1468,7 +1491,7 @@ export default function SimulatorClient() {
                                 return (
                                   <article
                                     key={assumption.id}
-                                    className="grid gap-4 rounded-[18px] border border-white/10 bg-black/26 p-4 sm:grid-cols-[minmax(0,1fr)_auto] sm:items-center"
+                                    className="grid gap-4 rounded-[14px] border border-white/10 bg-black/40 p-4 shadow-[inset_3px_0_0_rgba(239,68,68,0.64)] sm:grid-cols-[minmax(0,1fr)_auto] sm:items-center"
                                   >
                                     <div className="min-w-0">
                                       <div className="flex flex-wrap items-center gap-2">
@@ -1506,7 +1529,7 @@ export default function SimulatorClient() {
                                             ? "rounded-full border border-emerald-300/24 bg-emerald-400/14 px-3 py-2 text-xs font-medium text-emerald-200"
                                             : "rounded-full border border-emerald-300/20 bg-emerald-400/8 px-3 py-2 text-xs font-medium text-emerald-100 transition hover:border-emerald-200/38 hover:bg-emerald-400/14"
                                         }
-                                        onClick={() => handleKeepAssumption(assumption.id)}
+                                        onClick={() => handleKeepAssumption(assumption)}
                                         type="button"
                                       >
                                         {isKept ? "Kept" : "Keep assumption"}
