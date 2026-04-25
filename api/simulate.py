@@ -14,6 +14,7 @@ import numpy as np
 
 SCHEMA_VERSION: Final[str] = "2026-04"
 MAX_PAYLOAD_BYTES: Final[int] = 1_000_000
+INCOME_DELAY_MONTHS_FIELD: Final[str] = "income_delay_months"
 
 LOGGER = logging.getLogger(__name__)
 
@@ -120,6 +121,47 @@ def _build_error(
         "details": details,
         "retryable": retryable,
     }
+
+
+def _coerce_non_negative_int(name: str, value: Any, *, default: int = 0) -> int:
+    if value is None:
+        return default
+
+    if isinstance(value, bool):
+        raise ApiProblem(
+            "INVALID_PARAMS",
+            f"{name} must be a non-negative integer",
+            {"field": name, "reason": "boolean_not_allowed"},
+            False,
+        )
+
+    try:
+        coerced = int(value)
+    except (TypeError, ValueError) as exc:
+        raise ApiProblem(
+            "INVALID_PARAMS",
+            f"{name} must be a non-negative integer",
+            {"field": name, "reason": "non_integer_value"},
+            False,
+        ) from exc
+
+    if coerced != value and not (isinstance(value, str) and value.strip() == str(coerced)):
+        raise ApiProblem(
+            "INVALID_PARAMS",
+            f"{name} must be a non-negative integer",
+            {"field": name, "reason": "non_integer_value"},
+            False,
+        )
+
+    if coerced < 0:
+        raise ApiProblem(
+            "INVALID_PARAMS",
+            f"{name} must be a non-negative integer",
+            {"field": name, "reason": "below_minimum", "minimum": 0},
+            False,
+        )
+
+    return coerced
 
 
 class handler(BaseHTTPRequestHandler):
@@ -288,6 +330,12 @@ class handler(BaseHTTPRequestHandler):
                 {"field": "params"},
                 False,
             )
+
+        normalized_params[INCOME_DELAY_MONTHS_FIELD] = _coerce_non_negative_int(
+            INCOME_DELAY_MONTHS_FIELD,
+            normalized_params.get(INCOME_DELAY_MONTHS_FIELD),
+            default=0,
+        )
 
         return normalized_params
 

@@ -106,7 +106,7 @@ EXTRACTION_SYSTEM_PROMPT: Final[str] = """
 Правила:
 - Используй BASE_CONTEXT_JSON как доверенную память, если он передан.
 - Если в USER_MESSAGE есть явное новое число, оно важнее контекста.
-- Extract how many months the user will wait before getting their first income. Default is 0.
+- Extract how many months the user will wait before their first revenue. Default is 0.
 - Do not ask clarification only because income_delay_months is absent; use 0.
 - Detect the currency used in the text and return its symbol (e.g., '$', '€', '£', '₸'). If no currency is mentioned, default to '$'.
 - LANGUAGE RULE: Определи язык USER_MESSAGE. Ты ОБЯЗАН писать поля comment и question в ТОЧНО ТОМ ЖЕ ЯЗЫКЕ, что и USER_MESSAGE. Если пользователь пишет по-английски, отвечай по-английски. Если по-испански, отвечай по-испански. Всегда сохраняй холодный, циничный, финансово-терминальный тон независимо от языка.

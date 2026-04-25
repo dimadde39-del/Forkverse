@@ -30,6 +30,11 @@ class MonteRunParams:
     income_delay_months: int = 0
 
 
+@dataclass(frozen=True, slots=True)
+class TimeMasks:
+    income_active: np.ndarray
+
+
 def _as_float(name: str, value: Any, minimum: float | None = None) -> float:
     if isinstance(value, bool) or not isinstance(value, (int, float, np.integer, np.floating)):
         raise ParameterError(f"{name} must be numeric")
@@ -93,6 +98,22 @@ def _generate_noise(seed: int, n_paths: int, months: int) -> tuple[np.ndarray, n
     return income_noise, flexible_noise
 
 
+def _clamp_month_count(value: int, months: int) -> int:
+    return int(np.clip(value, 0, months))
+
+
+def _build_time_masks(*, months: int, income_delay_months: int = 0) -> TimeMasks:
+    if months < 1:
+        raise ParameterError("months must be >= 1")
+
+    delayed_months = _clamp_month_count(income_delay_months, months)
+    month_indices = np.arange(months, dtype=np.int64)
+
+    return TimeMasks(
+        income_active=month_indices >= delayed_months,
+    )
+
+
 def _simulate_capital_paths(
     params: MonteRunParams,
     *,
@@ -103,12 +124,13 @@ def _simulate_capital_paths(
     if income_noise.shape != flexible_noise.shape:
         raise ParameterError("income_noise and flexible_noise must have the same shape")
 
+    time_masks = _build_time_masks(
+        months=income_noise.shape[1],
+        income_delay_months=income_delay_months,
+    )
     realized_income = np.multiply(params.monthly_income, income_noise, dtype=np.float64)
+    realized_income = np.multiply(realized_income, time_masks.income_active, dtype=np.float64)
     realized_flexible_expenses = np.multiply(params.flexible_expenses, flexible_noise, dtype=np.float64)
-
-    if income_delay_months > 0:
-        delay = min(income_delay_months, income_noise.shape[1])
-        realized_income[:, :delay] = 0.0
 
     monthly_net = realized_income - params.fixed_expenses - realized_flexible_expenses
     raw_capital = params.cash + np.cumsum(monthly_net, axis=1, dtype=np.float64)

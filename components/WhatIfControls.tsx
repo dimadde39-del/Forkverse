@@ -175,7 +175,7 @@ function buildSliders(params: WhatIfSimulationParams): SliderDescriptor[] {
     },
     {
       key: "income_delay_months",
-      label: "Задержка дохода (мес) / Income Delay (months)",
+      label: "Задержка дохода (мес)",
       eyebrow: "timing",
       min: 0,
       max: delayMax,
@@ -347,7 +347,7 @@ export default function WhatIfControls({
                     <input
                       aria-label={
                         slider.key === "income_delay_months"
-                          ? "Задержка дохода (мес) / Income Delay (months) precise value"
+                          ? "Задержка дохода (мес) precise value"
                           : `${slider.label} precise value`
                       }
                       className="what-if-number h-8 w-[7.5rem] rounded-full border border-white/12 bg-black/24 px-3 text-right font-mono text-[12px] text-white/88 shadow-[inset_0_1px_0_rgba(255,255,255,0.04)] outline-none transition placeholder:text-white/24 focus:border-emerald-200/70 focus:bg-black/36 focus:text-emerald-50 focus:shadow-[0_0_0_3px_rgba(16,185,129,0.11)] disabled:cursor-not-allowed disabled:opacity-50 sm:w-[8.5rem]"

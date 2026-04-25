@@ -265,12 +265,13 @@ function cloneSimulationParams(params: SimulationParams): SimulationParams {
 
 function sanitizeSimulationParams(params: SimulationParams): SimulationParams {
   const months = Math.max(1, Math.round(params.months));
+  const incomeDelayMonths = isFiniteNumber(params.income_delay_months) ? params.income_delay_months : 0;
 
   return {
     initial_capital: Math.max(0, Math.round(params.initial_capital)),
     monthly_burn: Math.max(0, Math.round(params.monthly_burn)),
     monthly_income: Math.max(0, Math.round(params.monthly_income)),
-    income_delay_months: Math.min(MAX_INCOME_DELAY_MONTHS, months, Math.max(0, Math.round(params.income_delay_months))),
+    income_delay_months: Math.min(MAX_INCOME_DELAY_MONTHS, months, Math.max(0, Math.round(incomeDelayMonths))),
     months,
     n_simulations: Math.max(1, Math.min(4000, Math.round(params.n_simulations))),
   };
