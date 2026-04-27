@@ -70,6 +70,20 @@ LEGACY_SIMULATION_PATHS: Final[int] = 1_000
 SUGGESTED_STRESS_TARGETS: Final[frozenset[str]] = frozenset(
     {"income_delay", "capital_shock", "burn_multiplier"}
 )
+SMART_LEVER_EFFORTS: Final[frozenset[str]] = frozenset({"Low", "Medium", "High"})
+SMART_LEVER_PATCH_FIELDS: Final[frozenset[str]] = frozenset(
+    {
+        "cash",
+        "income",
+        "burn",
+        "monthly_income",
+        "fixed_expenses",
+        "flexible_expenses",
+        "income_delay_months",
+        "capital_shock",
+        "burn_multiplier",
+    }
+)
 
 EXTRACTION_SYSTEM_PROMPT: Final[str] = """
 Ты — MonteRun Extraction Layer.
@@ -104,6 +118,23 @@ NEVER ask follow-up questions. NEVER enter a conversational loop. If exact numbe
       "risk": "High risk: B2B sales usually take 90+ days",
       "suggested_stress": { "target": "income_delay", "value": 3 }
     }
+  ],
+  "smart_levers": [
+    {
+      "title": "Cut the tool stack you admitted is optional",
+      "effort": "Low",
+      "math_patch": { "burn": -500, "income": 0 }
+    },
+    {
+      "title": "Pre-sell one retained client before hiring",
+      "effort": "Medium",
+      "math_patch": { "income": 1000, "burn": 0 }
+    },
+    {
+      "title": "Delay launch spend until revenue starts",
+      "effort": "High",
+      "math_patch": { "capital_shock": -1500, "income_delay_months": -1 }
+    }
   ]
 }
 
@@ -124,6 +155,14 @@ NEVER ask follow-up questions. NEVER enter a conversational loop. If exact numbe
 - For a one-time cash threat, upfront surprise bill, equipment purchase, deposit, fine, medical/legal cost, refund, chargeback, or emergency cost, use suggested_stress.target = "capital_shock" with the one-time amount.
 - For recurring burn getting worse, underestimated monthly costs, ads CAC, rent, payroll, subscriptions, or "expenses may be higher", use suggested_stress.target = "burn_multiplier" with a multiplier like 1.2 or 1.5.
 - assumptions are parser notes only. Never change params to include the stress; MonteRun math will remain deterministic.
+- smart_levers is REQUIRED and must contain exactly 3 concrete rescue actions.
+- smart_levers[*] must be { "title": string, "effort": "Low" | "Medium" | "High", "math_patch": object }.
+- smart_levers[*].title must be specific to facts in USER_MESSAGE and BASE_CONTEXT_JSON, not generic motivational advice.
+- smart_levers[*].math_patch contains numeric deltas only. Allowed keys: cash, income, burn, monthly_income, fixed_expenses, flexible_expenses, income_delay_months, capital_shock, burn_multiplier.
+- Prefer the simple patch keys income and burn for monthly income and total monthly burn changes, e.g. { "burn": -500, "income": 0 }. Use fixed_expenses or flexible_expenses only when the user fact clearly points to that category.
+- Every math_patch must change at least one math-core input. Do not include impact_months, runway, probability, survival rate, verdict, or any calculated result inside smart_levers. MonteRun code will calculate impact deterministically.
+- Bind every lever to parsed facts: if the user is a freelancer, solo founder, student, or employee with no staff/payroll, do not suggest firing staff, cutting payroll, renegotiating team salaries, or other advice that assumes employees. If staff/payroll is not explicitly present, staff-related levers are forbidden.
+- Do not invent assets, employees, inventory, loans, clients, or dependents that are not stated or strongly implied by the user context.
 - Detect the currency used in the text and return its symbol (e.g., '$', '€', '£', '₸'). If no currency is mentioned, default to '$'.
 - LANGUAGE RULE: Определи язык USER_MESSAGE. Ты ОБЯЗАН писать поля comment и question в ТОЧНО ТОМ ЖЕ ЯЗЫКЕ, что и USER_MESSAGE. Если пользователь пишет по-английски, отвечай по-английски. Если по-испански, отвечай по-испански. Всегда сохраняй холодный, циничный, финансово-терминальный тон независимо от языка.
 - If a field is not explicit even after BASE_CONTEXT_JSON, prefer a pessimistic, clearly finance-grounded default over clarification.
@@ -954,6 +993,8 @@ def _persist_scenario_state(
         "survival_probability_12m": simulation_data.get("survival_probability_12m"),
         "levers": simulation_data.get("levers"),
     }
+    if isinstance(simulation_data.get("smart_levers"), list):
+        simulation_summary["smart_levers"] = simulation_data.get("smart_levers")
     if comment:
         simulation_summary["comment"] = comment
     if verdict:
@@ -1271,6 +1312,111 @@ def _normalize_assumptions(value: Any) -> list[dict[str, Any]]:
     return assumptions
 
 
+def _parse_patch_number(value: Any) -> float:
+    if isinstance(value, bool):
+        raise TypeError("boolean_not_allowed")
+
+    numeric_value = _parse_numeric_string(value) if isinstance(value, str) else float(value)
+    if not np.isfinite(numeric_value):
+        raise ValueError("non_finite_value")
+
+    return float(numeric_value)
+
+
+def _normalize_smart_levers(value: Any) -> list[dict[str, Any]]:
+    if not isinstance(value, list) or len(value) != 3:
+        raise ApiProblem(
+            "INVALID_PARAMS",
+            "DeepSeek extraction returned invalid smart_levers",
+            {
+                "stage": "extraction",
+                "field": "smart_levers",
+                "expected_count": 3,
+                "actual_count": len(value) if isinstance(value, list) else None,
+            },
+            False,
+            400,
+        )
+
+    smart_levers: list[dict[str, Any]] = []
+    for index, item in enumerate(value):
+        if not isinstance(item, Mapping):
+            raise ApiProblem(
+                "INVALID_PARAMS",
+                "DeepSeek extraction returned invalid smart_lever",
+                {"stage": "extraction", "field": f"smart_levers[{index}]"},
+                False,
+                400,
+            )
+
+        title = item.get("title")
+        effort = item.get("effort")
+        math_patch = item.get("math_patch")
+        if not isinstance(title, str) or not title.strip():
+            raise ApiProblem(
+                "INVALID_PARAMS",
+                "DeepSeek extraction returned invalid smart_lever title",
+                {"stage": "extraction", "field": f"smart_levers[{index}].title"},
+                False,
+                400,
+            )
+        if effort not in SMART_LEVER_EFFORTS:
+            raise ApiProblem(
+                "INVALID_PARAMS",
+                "DeepSeek extraction returned invalid smart_lever effort",
+                {"stage": "extraction", "field": f"smart_levers[{index}].effort"},
+                False,
+                400,
+            )
+        if not isinstance(math_patch, Mapping):
+            raise ApiProblem(
+                "INVALID_PARAMS",
+                "DeepSeek extraction returned invalid smart_lever math_patch",
+                {"stage": "extraction", "field": f"smart_levers[{index}].math_patch"},
+                False,
+                400,
+            )
+
+        normalized_patch: dict[str, float] = {}
+        for key, raw_value in math_patch.items():
+            if not isinstance(key, str):
+                continue
+
+            normalized_key = _clean_text(key)
+            if normalized_key not in SMART_LEVER_PATCH_FIELDS:
+                continue
+
+            try:
+                normalized_patch[normalized_key] = _parse_patch_number(raw_value)
+            except (TypeError, ValueError):
+                raise ApiProblem(
+                    "INVALID_PARAMS",
+                    "DeepSeek extraction returned invalid smart_lever math_patch value",
+                    {"stage": "extraction", "field": f"smart_levers[{index}].math_patch.{normalized_key}"},
+                    False,
+                    400,
+                ) from None
+
+        if not normalized_patch or all(value == 0.0 for value in normalized_patch.values()):
+            raise ApiProblem(
+                "INVALID_PARAMS",
+                "DeepSeek extraction returned inert smart_lever math_patch",
+                {"stage": "extraction", "field": f"smart_levers[{index}].math_patch"},
+                False,
+                400,
+            )
+
+        smart_levers.append(
+            {
+                "title": _clean_text(title),
+                "effort": effort,
+                "math_patch": normalized_patch,
+            }
+        )
+
+    return smart_levers
+
+
 def _normalize_extraction_payload(
     payload: dict[str, Any],
     fallback_params: Mapping[str, Any] | None = None,
@@ -1301,6 +1447,7 @@ def _normalize_extraction_payload(
     currency_symbol = _normalize_currency_symbol(merged_params.get(CURRENCY_SYMBOL_FIELD))
     missing_fields = _missing_param_fields(merged_params)
     assumptions = _normalize_assumptions(payload.get("assumptions"))
+    smart_levers = _normalize_smart_levers(payload.get("smart_levers"))
 
     if missing_fields:
         LOGGER.info("DeepSeek extraction omitted fields; applying pessimistic defaults: %s", missing_fields)
@@ -1335,6 +1482,7 @@ def _normalize_extraction_payload(
     }
     if assumptions:
         result["assumptions"] = assumptions
+    result["smart_levers"] = smart_levers
     return result
 
 
@@ -1496,16 +1644,29 @@ def _normalize_simulation_result(raw_result: Any) -> dict[str, Any]:
                 400,
             )
 
-        normalized_levers.append(
-            {
-                "action": action.strip(),
-                "impact_months": _coerce_non_negative_float(
-                    f"levers[{index}].impact_months",
-                    lever.get("impact_months"),
-                    stage="simulation",
-                ),
+        normalized_lever = {
+            "action": action.strip(),
+            "impact_months": _coerce_non_negative_float(
+                f"levers[{index}].impact_months",
+                lever.get("impact_months"),
+                stage="simulation",
+            ),
+        }
+        title = lever.get("title")
+        effort = lever.get("effort")
+        math_patch = lever.get("math_patch")
+        if isinstance(title, str) and title.strip():
+            normalized_lever["title"] = _clean_text(title)
+        if effort in SMART_LEVER_EFFORTS:
+            normalized_lever["effort"] = effort
+        if isinstance(math_patch, Mapping):
+            normalized_lever["math_patch"] = {
+                str(key): value
+                for key, value in math_patch.items()
+                if isinstance(key, str) and key in SMART_LEVER_PATCH_FIELDS
             }
-        )
+
+        normalized_levers.append(normalized_lever)
 
     normalized_levers.sort(key=lambda item: (-float(item["impact_months"]), str(item["action"])))
 
@@ -1527,6 +1688,8 @@ def _normalize_simulation_result(raw_result: Any) -> dict[str, Any]:
     for field in ("months", "p10", "p50", "p90", "spaghetti_sample", "n_simulations", "survival_probability"):
         if field in raw_result:
             result[field] = raw_result[field]
+    if isinstance(raw_result.get("smart_levers"), list):
+        result["smart_levers"] = raw_result["smart_levers"]
 
     return result
 
@@ -1559,6 +1722,121 @@ def _run_math_core(params: Any) -> dict[str, Any]:
         ) from exc
 
     return _normalize_simulation_result(raw_result)
+
+
+def _patched_float(value: float, delta: float) -> float:
+    return max(float(value) + float(delta), 0.0)
+
+
+def _apply_burn_delta(
+    *,
+    fixed_expenses: float,
+    flexible_expenses: float,
+    burn_delta: float,
+) -> tuple[float, float]:
+    if burn_delta >= 0.0:
+        return fixed_expenses, flexible_expenses + burn_delta
+
+    remaining_cut = abs(burn_delta)
+    flexible_cut = min(flexible_expenses, remaining_cut)
+    flexible_expenses -= flexible_cut
+    remaining_cut -= flexible_cut
+    fixed_expenses = max(fixed_expenses - remaining_cut, 0.0)
+    return fixed_expenses, flexible_expenses
+
+
+def _apply_math_patch_to_params(params: Any, math_patch: Mapping[str, Any]) -> Any:
+    MonteRunParams, _, _, _ = _get_math_core()
+
+    cash = _patched_float(float(params.cash), float(math_patch.get("cash", 0.0)))
+    monthly_income = _patched_float(
+        float(params.monthly_income),
+        float(math_patch.get("monthly_income", 0.0)) + float(math_patch.get("income", 0.0)),
+    )
+    fixed_expenses = _patched_float(float(params.fixed_expenses), float(math_patch.get("fixed_expenses", 0.0)))
+    flexible_expenses = _patched_float(float(params.flexible_expenses), float(math_patch.get("flexible_expenses", 0.0)))
+
+    if "burn" in math_patch:
+        fixed_expenses, flexible_expenses = _apply_burn_delta(
+            fixed_expenses=fixed_expenses,
+            flexible_expenses=flexible_expenses,
+            burn_delta=float(math_patch["burn"]),
+        )
+
+    income_delay_months = max(
+        int(getattr(params, INCOME_DELAY_MONTHS_FIELD, 0)) + int(float(math_patch.get(INCOME_DELAY_MONTHS_FIELD, 0.0))),
+        0,
+    )
+    capital_shock = _patched_float(
+        float(getattr(params, CAPITAL_SHOCK_FIELD, 0.0)),
+        float(math_patch.get(CAPITAL_SHOCK_FIELD, 0.0)),
+    )
+    burn_multiplier = _patched_float(
+        float(getattr(params, BURN_MULTIPLIER_FIELD, 1.0)),
+        float(math_patch.get(BURN_MULTIPLIER_FIELD, 0.0)),
+    )
+
+    return MonteRunParams(
+        cash=cash,
+        monthly_income=monthly_income,
+        fixed_expenses=fixed_expenses,
+        flexible_expenses=flexible_expenses,
+        income_delay_months=income_delay_months,
+        capital_shock=capital_shock,
+        burn_multiplier=burn_multiplier,
+    )
+
+
+def _build_smart_lever_results(
+    *,
+    params: Any,
+    base_runway_months: float,
+    smart_levers: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    results: list[dict[str, Any]] = []
+    for lever in smart_levers:
+        patched_params = _apply_math_patch_to_params(params, lever["math_patch"])
+        patched_result = _run_math_core(patched_params)
+        impact_months = max(
+            float(patched_result["base_runway_months"]) - float(base_runway_months),
+            0.0,
+        )
+        results.append(
+            {
+                "action": lever["title"],
+                "title": lever["title"],
+                "effort": lever["effort"],
+                "math_patch": dict(lever["math_patch"]),
+                "impact_months": impact_months,
+            }
+        )
+
+    results.sort(key=lambda item: (-float(item["impact_months"]), str(item["title"])))
+    return results
+
+
+def _apply_smart_levers_to_simulation(
+    *,
+    params: Any,
+    simulation_result: Mapping[str, Any],
+    smart_levers: list[dict[str, Any]],
+) -> dict[str, Any]:
+    normalized_result = _normalize_simulation_result(simulation_result)
+    smart_lever_results = _build_smart_lever_results(
+        params=params,
+        base_runway_months=float(normalized_result["base_runway_months"]),
+        smart_levers=smart_levers,
+    )
+    normalized_result["levers"] = smart_lever_results
+    normalized_result["smart_levers"] = [
+        {
+            "title": lever["title"],
+            "effort": lever["effort"],
+            "math_patch": dict(lever["math_patch"]),
+        }
+        for lever in smart_lever_results
+    ]
+    return normalized_result
 
 
 def _normalize_roast_payload(payload: dict[str, Any]) -> dict[str, Any]:
@@ -1699,9 +1977,20 @@ def _apply_localized_lever_actions(
     for lever, localized_action in zip(normalized_levers, localized_actions, strict=True):
         updated_lever = dict(lever)
         updated_lever["action"] = localized_action
+        if "title" in updated_lever:
+            updated_lever["title"] = localized_action
         localized_levers.append(updated_lever)
 
     normalized_result["levers"] = localized_levers
+    if isinstance(normalized_result.get("smart_levers"), list):
+        normalized_result["smart_levers"] = [
+            {
+                **dict(smart_lever),
+                "title": localized_lever["title"] if "title" in localized_lever else localized_lever["action"],
+            }
+            for smart_lever, localized_lever in zip(normalized_result["smart_levers"], localized_levers, strict=True)
+            if isinstance(smart_lever, Mapping)
+        ]
     return normalized_result
 
 
@@ -1850,6 +2139,9 @@ def _call_groq(
     assumptions = extracted.get("assumptions")
     if isinstance(assumptions, list) and assumptions:
         result["assumptions"] = assumptions
+    smart_levers = extracted.get("smart_levers")
+    if isinstance(smart_levers, list) and smart_levers:
+        result["smart_levers"] = smart_levers
     return result
 
 
@@ -1961,6 +2253,13 @@ class handler(BaseHTTPRequestHandler):
                 monte_run_params = _build_monte_run_params(raw_params)
                 serialized_params = _serialize_monte_run_params(monte_run_params, currency_symbol)
                 simulation_result = _run_math_core(monte_run_params)
+                smart_levers = extraction_result.get("smart_levers")
+                if isinstance(smart_levers, list):
+                    simulation_result = _apply_smart_levers_to_simulation(
+                        params=monte_run_params,
+                        simulation_result=simulation_result,
+                        smart_levers=smart_levers,
+                    )
                 roast = _call_roast_stage(
                     user_text=user_text,
                     extracted_params=serialized_params,

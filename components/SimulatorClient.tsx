@@ -73,6 +73,29 @@ type ParserAssumption = {
 
 const MAX_INCOME_DELAY_MONTHS = 12;
 
+type SmartLeverPatchKey =
+  | "cash"
+  | "income"
+  | "burn"
+  | "initial_capital"
+  | "monthly_income"
+  | "monthly_burn"
+  | "fixed_expenses"
+  | "flexible_expenses"
+  | "income_delay_months"
+  | "capital_shock"
+  | "burn_multiplier";
+
+type SmartLeverMathPatch = Partial<Record<SmartLeverPatchKey, number>>;
+
+type SmartLever = {
+  id: string;
+  title: string;
+  effort: string;
+  impact_months: number | null;
+  math_patch: SmartLeverMathPatch;
+};
+
 const simulationParamKeys = [
   "initial_capital",
   "monthly_burn",
@@ -89,6 +112,7 @@ type ParseReady = {
   params: SimulationParams;
   currency_symbol: string;
   assumptions?: ParserAssumption[] | null;
+  smart_levers?: SmartLever[] | null;
   question: null;
 };
 
@@ -96,6 +120,7 @@ type ParseNeedsClarification = {
   status: "needs_clarification";
   params: null;
   assumptions?: ParserAssumption[] | null;
+  smart_levers?: SmartLever[] | null;
   question: string;
 };
 
@@ -104,6 +129,9 @@ type ParseResponseData = ParseReady | ParseNeedsClarification;
 type SimulationLever = {
   action: string;
   impact_months: number;
+  title?: string | null;
+  effort?: string | null;
+  math_patch?: SmartLeverMathPatch | null;
 };
 
 type SimulationResponseData = {
@@ -160,12 +188,6 @@ type ShareCardViewModel = {
   survivalValue: string;
   verdict: string;
   comment: string;
-  levers: Array<{
-    reactKey: string;
-    indexLabel: string;
-    label: string;
-    impact: string;
-  }>;
 };
 
 type ShareLinkModel = {
@@ -329,6 +351,9 @@ function normalizeOptionalLevers(value: unknown): SimulationLever[] | null {
     levers.push({
       action,
       impact_months: impactMonths,
+      title: normalizeOptionalTextField(lever.title),
+      effort: normalizeOptionalTextField(lever.effort),
+      math_patch: normalizeSmartLeverMathPatch(lever.math_patch ?? lever.patch),
     });
   }
 
@@ -409,6 +434,85 @@ function normalizeOptionalAssumptions(value: unknown): ParserAssumption[] | null
   }
 
   return assumptions.length > 0 ? assumptions : null;
+}
+
+function normalizeSmartLeverMathPatch(value: unknown): SmartLeverMathPatch | null {
+  if (!isRecord(value)) {
+    return null;
+  }
+
+  const patchKeys = [
+    "cash",
+    "income",
+    "burn",
+    "initial_capital",
+    "monthly_income",
+    "monthly_burn",
+    "fixed_expenses",
+    "flexible_expenses",
+    "income_delay_months",
+    "capital_shock",
+    "burn_multiplier",
+  ] as const satisfies readonly SmartLeverPatchKey[];
+
+  const patch = patchKeys.reduce<SmartLeverMathPatch>((nextPatch, key) => {
+    const rawValue = value[key];
+    if (rawValue === undefined || rawValue === null) {
+      return nextPatch;
+    }
+
+    const normalizedValue = normalizeOptionalFiniteNumber(rawValue);
+
+    if (normalizedValue !== null) {
+      nextPatch[key] = normalizedValue;
+    }
+
+    return nextPatch;
+  }, {});
+
+  return Object.values(patch).some((patchValue) => patchValue !== 0) ? patch : null;
+}
+
+function normalizeOptionalSmartLevers(value: unknown): SmartLever[] | null {
+  if (!Array.isArray(value)) {
+    return null;
+  }
+
+  const levers: SmartLever[] = [];
+
+  for (const [index, lever] of value.entries()) {
+    if (!isRecord(lever)) {
+      continue;
+    }
+
+    const title =
+      normalizeOptionalTextField(lever.title) ??
+      normalizeOptionalTextField(lever.action) ??
+      normalizeOptionalTextField(lever.label);
+    const mathPatch = normalizeSmartLeverMathPatch(lever.math_patch ?? lever.patch);
+    if (!title || !mathPatch) {
+      continue;
+    }
+
+    const effort =
+      normalizeOptionalTextField(lever.effort) ??
+      normalizeOptionalTextField(lever.difficulty) ??
+      normalizeOptionalTextField(lever.time_to_effect) ??
+      "Medium";
+
+    levers.push({
+      id:
+        normalizeOptionalTextField(lever.id) ??
+        normalizeOptionalTextField(lever.key) ??
+        `smart-lever-${index}-${title}`,
+      title,
+      effort,
+      impact_months: normalizeOptionalNumberField(lever.impact_months ?? lever.impact),
+      math_patch: mathPatch,
+    });
+  }
+
+  return levers.length > 0 ? levers : null;
 }
 
 function cloneSimulationParams(params: SimulationParams): SimulationParams {
@@ -543,6 +647,92 @@ function formatStressLabel(stress: AssumptionStress | null, currencySymbol: stri
     default:
       return null;
   }
+}
+
+function formatSmartLeverPatchEffect(
+  mathPatch: SmartLeverMathPatch,
+  currentParams: SimulationParams | null,
+  currencySymbol: string,
+): string {
+  const effects: string[] = [];
+  const nextParams = currentParams ? applySmartLeverMathPatch(currentParams, mathPatch) : null;
+  const capitalDelta = (mathPatch.cash ?? 0) + (mathPatch.initial_capital ?? 0);
+  const incomeDelta = (mathPatch.income ?? 0) + (mathPatch.monthly_income ?? 0);
+  const burnDelta =
+    (mathPatch.burn ?? 0) +
+    (mathPatch.monthly_burn ?? 0) +
+    (mathPatch.fixed_expenses ?? 0) +
+    (mathPatch.flexible_expenses ?? 0);
+  const delayDelta = mathPatch.income_delay_months ?? 0;
+  const shockDelta = mathPatch.capital_shock ?? 0;
+  const multiplierDelta = mathPatch.burn_multiplier ?? 0;
+
+  if (capitalDelta !== 0) {
+    effects.push(formatDeltaEffect("Cash", capitalDelta, nextParams?.initial_capital, currencySymbol));
+  }
+
+  if (incomeDelta !== 0) {
+    effects.push(formatDeltaEffect("Income", incomeDelta, nextParams?.monthly_income, currencySymbol));
+  }
+
+  if (burnDelta !== 0) {
+    effects.push(formatDeltaEffect("Burn", burnDelta, nextParams?.monthly_burn, currencySymbol));
+  }
+
+  if (delayDelta !== 0) {
+    effects.push(formatNumberDeltaEffect("Delay", delayDelta, nextParams?.income_delay_months, formatDelayMonths));
+  }
+
+  if (shockDelta !== 0) {
+    effects.push(formatDeltaEffect("Shock", shockDelta, nextParams?.capital_shock, currencySymbol));
+  }
+
+  if (multiplierDelta !== 0) {
+    effects.push(formatNumberDeltaEffect("Burn x", multiplierDelta, nextParams?.burn_multiplier, formatBurnMultiplier));
+  }
+
+  return effects.length > 0 ? effects.join(" | ") : "No valid math patch";
+}
+
+function formatDeltaEffect(
+  label: string,
+  delta: number,
+  nextValue: number | undefined,
+  currencySymbol: string,
+): string {
+  const signedDelta = formatCurrencySigned(delta, currencySymbol);
+  return nextValue === undefined ? `${label} ${signedDelta}` : `${label} ${signedDelta} -> ${formatCurrency(nextValue, currencySymbol)}`;
+}
+
+function formatNumberDeltaEffect(
+  label: string,
+  delta: number,
+  nextValue: number | undefined,
+  formatter: (value: number) => string,
+): string {
+  const sign = delta > 0 ? "+" : "";
+  const formattedDelta = `${sign}${Number.isInteger(delta) ? delta.toFixed(0) : delta.toFixed(2).replace(/\.?0+$/, "")}`;
+  return nextValue === undefined ? `${label} ${formattedDelta}` : `${label} ${formattedDelta} -> ${formatter(nextValue)}`;
+}
+
+function applySmartLeverMathPatch(params: SimulationParams, mathPatch: SmartLeverMathPatch): SimulationParams {
+  const capitalDelta = (mathPatch.cash ?? 0) + (mathPatch.initial_capital ?? 0);
+  const incomeDelta = (mathPatch.income ?? 0) + (mathPatch.monthly_income ?? 0);
+  const burnDelta =
+    (mathPatch.burn ?? 0) +
+    (mathPatch.monthly_burn ?? 0) +
+    (mathPatch.fixed_expenses ?? 0) +
+    (mathPatch.flexible_expenses ?? 0);
+
+  return sanitizeSimulationParams({
+    ...params,
+    initial_capital: params.initial_capital + capitalDelta,
+    monthly_income: params.monthly_income + incomeDelta,
+    monthly_burn: params.monthly_burn + burnDelta,
+    income_delay_months: params.income_delay_months + (mathPatch.income_delay_months ?? 0),
+    capital_shock: params.capital_shock + (mathPatch.capital_shock ?? 0),
+    burn_multiplier: params.burn_multiplier + (mathPatch.burn_multiplier ?? 0),
+  });
 }
 
 function clampText(value: string | null | undefined, limit: number): string {
@@ -784,6 +974,7 @@ function normalizeParseResponseData(value: unknown): ParseResponseData {
       status: "needs_clarification",
       params: null,
       assumptions: normalizeOptionalAssumptions(value.assumptions),
+      smart_levers: normalizeOptionalSmartLevers(value.smart_levers),
       question: trimmedQuestion,
     };
   }
@@ -811,6 +1002,7 @@ function normalizeParseResponseData(value: unknown): ParseResponseData {
     },
     currency_symbol: normalizeCurrencySymbol(value.currency_symbol ?? params.currency_symbol),
     assumptions: normalizeOptionalAssumptions(value.assumptions),
+    smart_levers: normalizeOptionalSmartLevers(value.smart_levers),
     question: null,
   };
 }
@@ -870,11 +1062,36 @@ export default function SimulatorClient() {
   const [copyFeedback, setCopyFeedback] = useState<"idle" | "copied" | "error">("idle");
   const [appliedAssumptionIds, setAppliedAssumptionIds] = useState<Set<string>>(() => new Set());
   const [keptAssumptionIds, setKeptAssumptionIds] = useState<Set<string>>(() => new Set());
+  const [appliedSmartLeverId, setAppliedSmartLeverId] = useState<string | null>(null);
   const { status, chatHistory, clarificationContext, parseData, simulationData, simulationMeta, errorMessage } =
     viewState;
   const currencySymbol = parseData?.status === "ready" ? parseData.currency_symbol : "$";
   const assumptionsUnderPressure =
     parseData?.assumptions && parseData.assumptions.length > 0 ? parseData.assumptions : null;
+  const smartLevers = useMemo<SmartLever[] | null>(() => {
+    const simulationLevers = simulationData?.levers
+      ?.map((lever, index): SmartLever | null => {
+        if (!lever.math_patch) {
+          return null;
+        }
+
+        const title = lever.title ?? lever.action;
+        return {
+          id: `smart-lever-${index}-${title}`,
+          title,
+          effort: lever.effort ?? "Medium",
+          impact_months: lever.impact_months,
+          math_patch: lever.math_patch,
+        };
+      })
+      .filter((lever): lever is SmartLever => lever !== null);
+
+    if (simulationLevers && simulationLevers.length > 0) {
+      return simulationLevers;
+    }
+
+    return parseData?.smart_levers && parseData.smart_levers.length > 0 ? parseData.smart_levers : null;
+  }, [parseData?.smart_levers, simulationData?.levers]);
 
   const rawSeriesKeys = useMemo(() => Array.from({ length: 50 }, (_, index) => `sim${index}` as SimKey), []);
 
@@ -974,7 +1191,6 @@ export default function SimulatorClient() {
     const survivalProbability12m = simulationData?.survival_probability_12m;
     const verdict = simulationData?.verdict;
     const comment = simulationData?.comment;
-    const levers = simulationData?.levers;
 
     if (
       baseRunwayMonths === null ||
@@ -984,9 +1200,7 @@ export default function SimulatorClient() {
       typeof verdict !== "string" ||
       verdict.trim().length === 0 ||
       typeof comment !== "string" ||
-      comment.trim().length === 0 ||
-      !Array.isArray(levers) ||
-      levers.length === 0
+      comment.trim().length === 0
     ) {
       return null;
     }
@@ -1005,12 +1219,6 @@ export default function SimulatorClient() {
       survivalValue: formatShareProbability(survivalProbability12m),
       verdict: normalizedVerdict,
       comment: normalizedComment,
-      levers: levers.map((lever, index) => ({
-        reactKey: `${lever.action}:${lever.impact_months}`,
-        indexLabel: String(index + 1).padStart(2, "0"),
-        label: clampText(lever.action, 54),
-        impact: formatImpactMonths(lever.impact_months),
-      })),
     };
   }, [simulationData, simulationMeta?.generated_at]);
 
@@ -1106,6 +1314,7 @@ export default function SimulatorClient() {
       setHasTouchedWhatIf(false);
       setAppliedAssumptionIds(new Set());
       setKeptAssumptionIds(new Set());
+      setAppliedSmartLeverId(null);
       return;
     }
 
@@ -1115,6 +1324,7 @@ export default function SimulatorClient() {
     setHasTouchedWhatIf(false);
     setAppliedAssumptionIds(new Set());
     setKeptAssumptionIds(new Set());
+    setAppliedSmartLeverId(null);
   }, [parseData]);
 
   const isWhatIfDirty =
@@ -1133,6 +1343,10 @@ export default function SimulatorClient() {
   const handleWhatIfSuccess = useCallback((result: SimulationResponseData, meta: ApiMeta) => {
     setViewState((current) => {
       const previousSimulation = current.simulationData;
+      const nextLevers =
+        result.levers?.some((lever) => lever.math_patch)
+          ? result.levers
+          : previousSimulation?.levers ?? result.levers ?? null;
 
       return {
         ...current,
@@ -1140,7 +1354,7 @@ export default function SimulatorClient() {
           ...result,
           verdict: result.verdict ?? previousSimulation?.verdict ?? null,
           comment: result.comment ?? previousSimulation?.comment ?? null,
-          levers: result.levers ?? previousSimulation?.levers ?? null,
+          levers: nextLevers,
         },
         simulationMeta: meta,
         errorMessage: null,
@@ -1167,7 +1381,30 @@ export default function SimulatorClient() {
   const handleWhatIfParamsChange = useCallback((nextParams: SimulationParams) => {
     setHasTouchedWhatIf(true);
     setWhatIfParams(sanitizeSimulationParams(nextParams));
+    setAppliedSmartLeverId(null);
   }, []);
+
+  const handleApplySmartLever = useCallback(
+    (lever: SmartLever) => {
+      if (appliedSmartLeverId === lever.id) {
+        return;
+      }
+
+      setHasTouchedWhatIf(true);
+      setWhatIfParams((currentParams) => {
+        const baseParams =
+          currentParams ?? (parseData?.status === "ready" ? sanitizeSimulationParams(parseData.params) : null);
+
+        if (!baseParams) {
+          return currentParams;
+        }
+
+        return applySmartLeverMathPatch(baseParams, lever.math_patch);
+      });
+      setAppliedSmartLeverId(lever.id);
+    },
+    [appliedSmartLeverId, parseData],
+  );
 
   const handleApplyAssumptionStress = useCallback(
     (assumption: ParserAssumption) => {
@@ -1201,6 +1438,7 @@ export default function SimulatorClient() {
         nextIds.delete(assumption.id);
         return nextIds;
       });
+      setAppliedSmartLeverId(null);
     },
     [parseData],
   );
@@ -1819,22 +2057,76 @@ export default function SimulatorClient() {
                           </section>
                         ) : null}
 
-                        <section className="share-card__levers" aria-label="Fastest ways to extend survival">
-                          <div className="share-card__section-kicker">Fastest ways to extend survival</div>
-                          <div className="share-card__lever-grid">
-                            {shareCard.levers.map((lever) => (
-                              <article key={lever.reactKey} className="lever-card">
-                                <div className="lever-card__meta">
-                                  <span className="lever-card__index">{lever.indexLabel}</span>
-                                  <span>Impact</span>
-                                </div>
-                                <div className="lever-card__body">
-                                  <div className="lever-card__title">{lever.label}</div>
-                                  <div className="lever-card__impact">{lever.impact}</div>
-                                </div>
-                              </article>
-                            ))}
+                        <section
+                          aria-label="Escape Routes"
+                          className="rounded-[18px] border border-emerald-300/18 bg-[linear-gradient(135deg,rgba(6,78,59,0.28),rgba(5,5,5,0.92)_48%,rgba(148,163,184,0.08))] p-4 shadow-[inset_0_1px_0_rgba(16,185,129,0.12),0_18px_70px_rgba(6,78,59,0.14)] sm:p-5"
+                        >
+                          <div className="flex flex-col gap-2 border-b border-white/10 pb-4 sm:flex-row sm:items-end sm:justify-between">
+                            <div>
+                              <div className="share-card__section-kicker">Escape Routes</div>
+                            </div>
+                            {whatIfSimulation.isPending ? (
+                              <div className="rounded-full border border-emerald-300/20 bg-emerald-400/10 px-3 py-1.5 font-mono text-[11px] uppercase tracking-[0.14em] text-emerald-100">
+                                Recalculating
+                              </div>
+                            ) : null}
                           </div>
+
+                          {smartLevers ? (
+                            <div className="mt-4 grid gap-3 lg:grid-cols-3">
+                              {smartLevers.map((lever, index) => {
+                                const isApplied = appliedSmartLeverId === lever.id;
+                                const patchEffect = formatSmartLeverPatchEffect(
+                                  lever.math_patch,
+                                  readyParams,
+                                  currencySymbol,
+                                );
+
+                                return (
+                                  <button
+                                    key={lever.id}
+                                    className={
+                                      isApplied
+                                        ? "group grid h-full min-h-[178px] gap-4 rounded-[14px] border border-emerald-200/34 bg-emerald-400/14 p-4 text-left shadow-[inset_3px_0_0_rgba(52,211,153,0.86)]"
+                                        : "group grid h-full min-h-[178px] gap-4 rounded-[14px] border border-white/10 bg-black/38 p-4 text-left shadow-[inset_3px_0_0_rgba(16,185,129,0.52)] transition hover:border-emerald-200/34 hover:bg-emerald-400/10 focus:outline-none focus:ring-2 focus:ring-emerald-200/50"
+                                    }
+                                    disabled={isApplied || status !== "simulated" || whatIfSimulation.isPending}
+                                    onClick={() => handleApplySmartLever(lever)}
+                                    type="button"
+                                  >
+                                    <span className="flex flex-wrap items-center justify-between gap-2">
+                                      <span className="rounded-full border border-emerald-300/20 bg-emerald-400/10 px-2.5 py-1 font-mono text-[10px] uppercase tracking-[0.16em] text-emerald-200">
+                                        Route {String(index + 1).padStart(2, "0")}
+                                      </span>
+                                      <span className="rounded-full border border-white/10 bg-white/5 px-2.5 py-1 font-mono text-[10px] uppercase tracking-[0.14em] text-white/56">
+                                        {lever.effort}
+                                      </span>
+                                    </span>
+                                    <span className="grid gap-2">
+                                      <span className="text-base font-medium leading-6 text-white">{lever.title}</span>
+                                      <span className="font-mono text-[12px] leading-5 text-emerald-100/82">
+                                        {patchEffect}
+                                      </span>
+                                    </span>
+                                    <span className="mt-auto flex items-center justify-between gap-3 border-t border-white/10 pt-3">
+                                      <span className="font-mono text-[11px] uppercase tracking-[0.14em] text-white/46">
+                                        {lever.impact_months !== null
+                                          ? formatImpactMonths(lever.impact_months)
+                                          : "Impact recalculated"}
+                                      </span>
+                                      <span className="font-mono text-[11px] uppercase tracking-[0.14em] text-emerald-200">
+                                        {isApplied ? "Applied" : "Apply"}
+                                      </span>
+                                    </span>
+                                  </button>
+                                );
+                              })}
+                            </div>
+                          ) : (
+                            <div className="mt-4 rounded-[14px] border border-dashed border-white/10 bg-black/28 px-4 py-5 text-sm leading-6 text-white/48">
+                              No escape routes for this scenario.
+                            </div>
+                          )}
                         </section>
 
                         {shareLinks ? (
@@ -2030,9 +2322,7 @@ export default function SimulatorClient() {
           }
 
           .share-card__runway-value,
-          .share-card__metric-value,
-          .lever-card__meta,
-          .lever-card__impact {
+          .share-card__metric-value {
             font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
             font-variant-numeric: tabular-nums;
           }
@@ -2191,88 +2481,6 @@ export default function SimulatorClient() {
             transform: none;
           }
 
-          .share-card__levers {
-            display: grid;
-            gap: 18px;
-            align-content: start;
-          }
-
-          .share-card__lever-grid {
-            display: grid;
-            grid-template-columns: repeat(3, minmax(0, 1fr));
-            gap: 16px;
-          }
-
-          .lever-card {
-            position: relative;
-            display: grid;
-            gap: 20px;
-            align-content: space-between;
-            min-height: 180px;
-            padding: 20px;
-            border: 1px solid var(--line);
-            border-radius: 18px;
-            background:
-              linear-gradient(180deg, rgba(255, 255, 255, 0.02), transparent 60%),
-              var(--surface-3);
-            overflow: hidden;
-          }
-
-          .lever-card::before {
-            content: "";
-            position: absolute;
-            inset: 0 auto auto 0;
-            width: 100%;
-            height: 1px;
-            background: linear-gradient(90deg, rgba(0, 255, 170, 0.45), transparent 55%);
-            opacity: 0.8;
-          }
-
-          .lever-card__meta {
-            display: flex;
-            align-items: center;
-            justify-content: space-between;
-            gap: 12px;
-            font-size: 0.72rem;
-            letter-spacing: 0.18em;
-            text-transform: uppercase;
-            color: var(--text-muted);
-          }
-
-          .lever-card__index {
-            color: var(--accent);
-          }
-
-          .lever-card__body {
-            display: grid;
-            gap: 12px;
-            min-width: 0;
-          }
-
-          .lever-card__title {
-            min-width: 0;
-            font-size: 1.03rem;
-            line-height: 1.35;
-            color: var(--text-primary);
-          }
-
-          .lever-card__impact {
-            display: inline-flex;
-            width: fit-content;
-            max-width: 100%;
-            padding: 8px 10px;
-            border-radius: 999px;
-            border: 1px solid rgba(0, 255, 170, 0.14);
-            background: var(--accent-soft);
-            font-size: 0.83rem;
-            letter-spacing: 0.12em;
-            text-transform: uppercase;
-            color: var(--accent);
-            white-space: nowrap;
-            overflow: hidden;
-            text-overflow: ellipsis;
-          }
-
           .share-card__footer {
             margin-top: auto;
             padding-top: 18px;
@@ -2348,14 +2556,6 @@ export default function SimulatorClient() {
 
             .share-card__metric {
               min-height: 180px;
-            }
-
-            .share-card__lever-grid {
-              grid-template-columns: 1fr;
-            }
-
-            .lever-card {
-              min-height: 148px;
             }
 
             .share-card__verdict-text {
@@ -2435,10 +2635,6 @@ export default function SimulatorClient() {
               letter-spacing: 0.12em;
             }
 
-            .lever-card {
-              padding: 18px;
-              min-height: 138px;
-            }
           }
         `}</style>
       </div>
