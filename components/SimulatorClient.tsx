@@ -173,6 +173,11 @@ type ShareLinkModel = {
   sharePagePath: string;
 };
 
+type StressUrlState = {
+  mode: string;
+  factors: string[];
+};
+
 const moneyFormatter = new Intl.NumberFormat("ru-RU", {
   maximumFractionDigits: 0,
 });
@@ -591,6 +596,116 @@ function formatShareTimestamp(iso: string): string {
   return `${year}-${month}-${day} ${hours}:${minutes} UTC`;
 }
 
+function formatUrlNumber(value: number): string {
+  return Number.isInteger(value) ? String(value) : value.toFixed(2).replace(/\.?0+$/, "");
+}
+
+function formatUrlPercent(value: number): string {
+  const normalized = value > 0 && value <= 1 ? value * 100 : value;
+  return formatUrlNumber(Math.round(clampPct(normalized) * 10) / 10);
+}
+
+function getStressUrlState(params: SimulationParams, baselineParams: SimulationParams | null): StressUrlState {
+  if (!baselineParams || areSimulationParamsEqual(params, baselineParams)) {
+    return {
+      mode: "base",
+      factors: [],
+    };
+  }
+
+  const factors: string[] = [];
+  if (params.burn_multiplier > baselineParams.burn_multiplier) {
+    factors.push("bad_month");
+  }
+
+  if (params.income_delay_months > baselineParams.income_delay_months) {
+    factors.push("late_payments");
+  }
+
+  if (params.monthly_income < baselineParams.monthly_income) {
+    factors.push("client_loss");
+  }
+
+  if (params.capital_shock > baselineParams.capital_shock) {
+    factors.push("emergency_expense");
+  }
+
+  const uniqueFactors = Array.from(new Set(factors));
+  return {
+    mode: uniqueFactors.length === 0 ? "stress" : uniqueFactors.length === 1 ? uniqueFactors[0] : "combined_stress",
+    factors: uniqueFactors,
+  };
+}
+
+function setSimulationParamSearchParams(searchParams: URLSearchParams, params: SimulationParams, prefix = "") {
+  for (const key of simulationParamKeys) {
+    searchParams.set(`${prefix}${key}`, formatUrlNumber(params[key]));
+  }
+}
+
+function buildSimulationUrlSearchParams({
+  params,
+  baselineParams,
+  simulationData,
+  shareCard,
+  currencySymbol,
+}: {
+  params: SimulationParams;
+  baselineParams: SimulationParams | null;
+  simulationData: SimulationResponseData;
+  shareCard: ShareCardViewModel | null;
+  currencySymbol: string;
+}): URLSearchParams {
+  const searchParams = new URLSearchParams();
+  const stress = getStressUrlState(params, baselineParams);
+
+  setSimulationParamSearchParams(searchParams, params);
+  searchParams.set("capital", formatUrlNumber(params.initial_capital));
+  searchParams.set("burn", formatUrlNumber(params.monthly_burn));
+  searchParams.set("income", formatUrlNumber(params.monthly_income));
+  searchParams.set("currency", currencySymbol);
+  searchParams.set("mode", stress.mode);
+  searchParams.set("stress_mode", stress.mode);
+
+  if (stress.factors.length > 0) {
+    searchParams.set("stress_factors", stress.factors.join(","));
+  }
+
+  if (baselineParams) {
+    setSimulationParamSearchParams(searchParams, baselineParams, "base_");
+  }
+
+  if (simulationData.base_runway_months !== null) {
+    searchParams.set("runway", formatUrlNumber(Math.round(simulationData.base_runway_months * 10) / 10));
+  }
+
+  if (simulationData.survival_probability_12m !== null) {
+    searchParams.set("survival", formatUrlPercent(simulationData.survival_probability_12m));
+  } else {
+    searchParams.set("survival", formatUrlPercent(simulationData.survival_probability));
+  }
+
+  if (shareCard?.verdict) {
+    searchParams.set("verdict", shareCard.verdict);
+  } else if (simulationData.verdict) {
+    searchParams.set("verdict", clampText(simulationData.verdict, 140));
+  }
+
+  if (shareCard?.comment) {
+    searchParams.set("comment", shareCard.comment);
+  } else if (simulationData.comment) {
+    searchParams.set("comment", clampText(simulationData.comment, 140));
+  }
+
+  const topLever = simulationData.levers?.[0];
+  if (topLever) {
+    searchParams.set("top_lever", clampText(topLever.action, 80));
+    searchParams.set("top_lever_impact", formatUrlNumber(topLever.impact_months));
+  }
+
+  return searchParams;
+}
+
 function CustomTooltip({ active, payload, currencySymbol }: CustomTooltipProps) {
   if (!active || !payload || payload.length === 0) {
     return null;
@@ -899,38 +1014,81 @@ export default function SimulatorClient() {
     };
   }, [simulationData, simulationMeta?.generated_at]);
 
+  const parsedParams = parseData?.status === "ready" ? parseData.params : null;
+  const readyParams = whatIfParams ?? parsedParams;
+
   const shareLinks = useMemo<ShareLinkModel | null>(() => {
     const baseRunwayMonths = simulationData?.base_runway_months;
     const survivalProbability12m = simulationData?.survival_probability_12m;
     const verdict = shareCard?.verdict;
+    const survivalPercent =
+      typeof survivalProbability12m === "number" && survivalProbability12m > 0 && survivalProbability12m <= 1
+        ? survivalProbability12m * 100
+        : survivalProbability12m;
 
     if (
+      !readyParams ||
       baseRunwayMonths === null ||
       baseRunwayMonths === undefined ||
-      survivalProbability12m === null ||
-      survivalProbability12m === undefined ||
+      survivalPercent === null ||
+      survivalPercent === undefined ||
       !verdict
     ) {
       return null;
     }
 
-    return {
-      ogImagePath: getOgImagePath({
-        runway: baseRunwayMonths,
-        survival: survivalProbability12m,
-        verdict,
-      }),
-      sharePagePath: getSharePagePath({
-        runway: baseRunwayMonths,
-        survival: survivalProbability12m,
-        verdict,
-      }),
+    const sharePayload = {
+      runway: baseRunwayMonths,
+      survival: survivalPercent,
+      verdict,
+      capital: readyParams.initial_capital,
+      income: readyParams.monthly_income,
+      burn: readyParams.monthly_burn,
+      incomeDelayMonths: readyParams.income_delay_months,
+      capitalShock: readyParams.capital_shock,
+      burnMultiplier: readyParams.burn_multiplier,
+      months: readyParams.months,
+      nSimulations: readyParams.n_simulations,
     };
-  }, [shareCard?.verdict, simulationData?.base_runway_months, simulationData?.survival_probability_12m]);
+
+    return {
+      ogImagePath: getOgImagePath(sharePayload),
+      sharePagePath: getSharePagePath(sharePayload),
+    };
+  }, [
+    readyParams,
+    shareCard?.verdict,
+    simulationData?.base_runway_months,
+    simulationData?.survival_probability_12m,
+  ]);
+
+  const serializedSimulationUrlParams = useMemo(() => {
+    if (!readyParams || !simulationData) {
+      return null;
+    }
+
+    return buildSimulationUrlSearchParams({
+      params: readyParams,
+      baselineParams: whatIfBaselineParams,
+      simulationData,
+      shareCard,
+      currencySymbol,
+    }).toString();
+  }, [currencySymbol, readyParams, shareCard, simulationData, whatIfBaselineParams]);
 
   useEffect(() => {
     setCopyFeedback("idle");
-  }, [shareLinks?.sharePagePath]);
+  }, [serializedSimulationUrlParams]);
+
+  useEffect(() => {
+    if (!serializedSimulationUrlParams || typeof window === "undefined") {
+      return;
+    }
+
+    const url = new URL(window.location.href);
+    url.search = serializedSimulationUrlParams;
+    window.history.replaceState(window.history.state, "", `${url.pathname}${url.search}${url.hash}`);
+  }, [serializedSimulationUrlParams]);
 
   useEffect(() => {
     if (copyFeedback === "idle" || typeof window === "undefined") {
@@ -959,8 +1117,6 @@ export default function SimulatorClient() {
     setKeptAssumptionIds(new Set());
   }, [parseData]);
 
-  const parsedParams = parseData?.status === "ready" ? parseData.params : null;
-  const readyParams = whatIfParams ?? parsedParams;
   const isWhatIfDirty =
     Boolean(whatIfBaselineParams && readyParams) && !areSimulationParamsEqual(whatIfBaselineParams, readyParams);
   const isBusy = status === "parsing" || status === "simulating";
@@ -1099,14 +1255,15 @@ export default function SimulatorClient() {
   }, [parseData, whatIfBaselineParams]);
 
   async function handleCopyShareLink() {
-    if (!shareLinks || typeof window === "undefined" || !navigator.clipboard) {
+    if (!serializedSimulationUrlParams || typeof window === "undefined" || !navigator.clipboard) {
       setCopyFeedback("error");
       return;
     }
 
     try {
-      const absoluteShareUrl = new URL(shareLinks.sharePagePath, window.location.origin).toString();
-      await navigator.clipboard.writeText(absoluteShareUrl);
+      const absoluteShareUrl = new URL(window.location.href);
+      absoluteShareUrl.search = serializedSimulationUrlParams;
+      await navigator.clipboard.writeText(absoluteShareUrl.toString());
       setCopyFeedback("copied");
     } catch (error) {
       console.error("[SimClient] Unable to copy share URL:", error);
@@ -1210,6 +1367,15 @@ export default function SimulatorClient() {
   return (
     <div className="relative isolate min-h-screen overflow-hidden">
       <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_top_left,rgba(16,185,129,0.12),transparent_28%),radial-gradient(circle_at_78%_18%,rgba(255,255,255,0.06),transparent_22%),radial-gradient(circle_at_70%_78%,rgba(16,185,129,0.1),transparent_24%)]" />
+      {copyFeedback === "copied" ? (
+        <div
+          aria-live="polite"
+          className="fixed bottom-5 left-1/2 z-50 -translate-x-1/2 rounded-full border border-emerald-200/24 bg-[rgba(5,12,10,0.92)] px-5 py-3 text-sm font-medium text-emerald-100 shadow-[0_18px_70px_rgba(0,0,0,0.42)] backdrop-blur-xl"
+          role="status"
+        >
+          Ссылка скопирована
+        </div>
+      ) : null}
 
       <div className="mx-auto flex min-h-screen max-w-7xl flex-col gap-6 px-4 py-6 sm:px-6 lg:px-8">
         <header className={`${panelClass} relative overflow-hidden px-5 py-5 sm:px-6 sm:py-6`}>
@@ -1566,6 +1732,17 @@ export default function SimulatorClient() {
                           <p className="share-card__verdict-text">{shareCard.verdict}</p>
                         </section>
 
+                        <div className="share-card__reality-check">
+                          <button
+                            className="share-card__reality-button"
+                            disabled={!serializedSimulationUrlParams}
+                            onClick={handleCopyShareLink}
+                            type="button"
+                          >
+                            [ Share Reality Check ]
+                          </button>
+                        </div>
+
                         {assumptionsUnderPressure ? (
                           <section
                             aria-label="Assumptions under pressure"
@@ -1662,13 +1839,6 @@ export default function SimulatorClient() {
 
                         {shareLinks ? (
                           <section className="share-card__actions" aria-label="Share result">
-                            <button className="share-card__action-button" onClick={handleCopyShareLink} type="button">
-                              {copyFeedback === "copied"
-                                ? "Share link copied"
-                                : copyFeedback === "error"
-                                  ? "Copy unavailable"
-                                  : "Copy share link"}
-                            </button>
                             <a
                               className="share-card__action-link"
                               href={shareLinks.sharePagePath}
@@ -1971,6 +2141,56 @@ export default function SimulatorClient() {
             max-width: 24ch;
           }
 
+          .share-card__reality-check {
+            display: flex;
+            align-items: center;
+            justify-content: flex-start;
+            margin-top: -10px;
+          }
+
+          .share-card__reality-button {
+            display: inline-flex;
+            min-height: 46px;
+            align-items: center;
+            justify-content: center;
+            border: 1px solid rgba(0, 255, 170, 0.28);
+            border-radius: 999px;
+            background:
+              linear-gradient(180deg, rgba(0, 255, 170, 0.14), rgba(0, 255, 170, 0.05)),
+              rgba(255, 255, 255, 0.02);
+            box-shadow:
+              inset 0 1px 0 rgba(255, 255, 255, 0.06),
+              0 18px 50px rgba(0, 255, 170, 0.08);
+            color: var(--accent);
+            cursor: pointer;
+            font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+            font-size: 0.78rem;
+            font-weight: 700;
+            letter-spacing: 0.16em;
+            padding: 0 18px;
+            text-transform: uppercase;
+            transition:
+              border-color 140ms ease,
+              background-color 140ms ease,
+              color 140ms ease,
+              transform 140ms ease;
+          }
+
+          .share-card__reality-button:hover {
+            border-color: rgba(0, 255, 170, 0.48);
+            background:
+              linear-gradient(180deg, rgba(0, 255, 170, 0.2), rgba(0, 255, 170, 0.08)),
+              rgba(255, 255, 255, 0.03);
+            color: #d8fff2;
+            transform: translateY(-1px);
+          }
+
+          .share-card__reality-button:disabled {
+            cursor: not-allowed;
+            opacity: 0.52;
+            transform: none;
+          }
+
           .share-card__levers {
             display: grid;
             gap: 18px;
@@ -2205,6 +2425,14 @@ export default function SimulatorClient() {
             .share-card__verdict-text {
               font-size: 1.08rem;
               line-height: 1.3;
+            }
+
+            .share-card__reality-button {
+              width: 100%;
+              min-height: 44px;
+              padding: 0 14px;
+              font-size: 0.72rem;
+              letter-spacing: 0.12em;
             }
 
             .lever-card {

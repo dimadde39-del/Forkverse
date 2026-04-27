@@ -4,9 +4,47 @@ export type ShareCardPayload = {
   runway: number;
   survival: number;
   verdict: string;
+  capital: number;
+  income: number;
+  burn: number;
+  incomeDelayMonths: number;
+  capitalShock: number;
+  burnMultiplier: number;
+  months: number;
+  nSimulations: number;
 };
 
-const DEFAULT_VERDICT = "Math decides before momentum does.";
+export type ShareCardQueryPayload = {
+  runway: number;
+  survival: number;
+  verdict: string;
+  capital?: number;
+  income?: number;
+  burn?: number;
+  incomeDelayMonths?: number;
+  capitalShock?: number;
+  burnMultiplier?: number;
+  months?: number;
+  nSimulations?: number;
+};
+
+const DEFAULT_VERDICT = "My startup dies in 9 months. Beat that.";
+const DEFAULT_CAPITAL = 5_000_000;
+const DEFAULT_INCOME = 450_000;
+const DEFAULT_BURN = 950_000;
+const DEFAULT_SURVIVAL = 37;
+const DEFAULT_MONTHS = 18;
+const DEFAULT_N_SIMULATIONS = 100;
+
+const URL_PARAM_ALIASES = {
+  capital: ["capital", "initial_capital"],
+  income: ["income", "monthly_income"],
+  burn: ["burn", "monthly_burn"],
+  incomeDelayMonths: ["income_delay_months", "delay"],
+  capitalShock: ["capital_shock", "shock"],
+  burnMultiplier: ["burn_multiplier", "burnMultiplier"],
+  nSimulations: ["n_simulations", "sims"],
+} as const;
 
 function pickFirst(value: SearchValue): string | null {
   if (typeof value === "string") {
@@ -20,6 +58,17 @@ function pickFirst(value: SearchValue): string | null {
   return null;
 }
 
+function pickFirstFromAliases(source: Record<string, SearchValue>, aliases: readonly string[]): SearchValue {
+  for (const alias of aliases) {
+    const value = source[alias];
+    if (pickFirst(value) !== null) {
+      return value;
+    }
+  }
+
+  return undefined;
+}
+
 function clampNumber(value: number, minimum: number, maximum: number): number {
   return Math.min(Math.max(value, minimum), maximum);
 }
@@ -28,18 +77,39 @@ function roundMetric(value: number): number {
   return Math.round(value * 10) / 10;
 }
 
-function parseMetric(value: SearchValue, fallback: number, minimum: number, maximum: number): number {
+function parseOptionalMetric(value: SearchValue, minimum: number, maximum: number): number | null {
   const rawValue = pickFirst(value);
   if (!rawValue) {
-    return fallback;
+    return null;
   }
 
   const normalized = Number.parseFloat(rawValue.replace(/[^0-9.+-]/g, ""));
   if (!Number.isFinite(normalized)) {
-    return fallback;
+    return null;
   }
 
   return roundMetric(clampNumber(normalized, minimum, maximum));
+}
+
+function parseMetric(value: SearchValue, fallback: number, minimum: number, maximum: number): number {
+  return parseOptionalMetric(value, minimum, maximum) ?? fallback;
+}
+
+function deriveRunwayMonths(capital: number, income: number, burn: number): number {
+  const monthlyLoss = Math.max(0, burn - income);
+  if (monthlyLoss <= 0) {
+    return 120;
+  }
+
+  return roundMetric(clampNumber(capital / monthlyLoss, 0, 999));
+}
+
+function setMetric(params: URLSearchParams, key: string, value: number | undefined, minimum: number, maximum: number) {
+  if (typeof value !== "number" || !Number.isFinite(value)) {
+    return;
+  }
+
+  params.set(key, formatMetricValue(clampNumber(value, minimum, maximum)));
 }
 
 export function clampText(value: string, limit: number): string {
@@ -56,17 +126,45 @@ export function clampText(value: string, limit: number): string {
   return `${glyphs.slice(0, limit).join("").trimEnd()}...`;
 }
 
-export function normalizeShareCardPayload(source: {
-  runway?: SearchValue;
-  survival?: SearchValue;
-  verdict?: SearchValue;
-}): ShareCardPayload {
+export function normalizeShareCardPayload(source: Record<string, SearchValue>): ShareCardPayload {
+  const capital = parseMetric(
+    pickFirstFromAliases(source, URL_PARAM_ALIASES.capital),
+    DEFAULT_CAPITAL,
+    0,
+    1_000_000_000,
+  );
+  const income = parseMetric(
+    pickFirstFromAliases(source, URL_PARAM_ALIASES.income),
+    DEFAULT_INCOME,
+    0,
+    1_000_000_000,
+  );
+  const burn = parseMetric(pickFirstFromAliases(source, URL_PARAM_ALIASES.burn), DEFAULT_BURN, 0, 1_000_000_000);
+  const runway = parseOptionalMetric(source.runway, 0, 999) ?? deriveRunwayMonths(capital, income, burn);
   const verdict = clampText(pickFirst(source.verdict) ?? DEFAULT_VERDICT, 140) || DEFAULT_VERDICT;
 
   return {
-    runway: parseMetric(source.runway, 0, 0, 999),
-    survival: parseMetric(source.survival, 0, 0, 100),
+    runway,
+    survival: parseMetric(source.survival, DEFAULT_SURVIVAL, 0, 100),
     verdict,
+    capital,
+    income,
+    burn,
+    incomeDelayMonths: parseMetric(
+      pickFirstFromAliases(source, URL_PARAM_ALIASES.incomeDelayMonths),
+      0,
+      0,
+      240,
+    ),
+    capitalShock: parseMetric(pickFirstFromAliases(source, URL_PARAM_ALIASES.capitalShock), 0, 0, 1_000_000_000),
+    burnMultiplier: parseMetric(pickFirstFromAliases(source, URL_PARAM_ALIASES.burnMultiplier), 1, 0, 10),
+    months: parseMetric(source.months, DEFAULT_MONTHS, 1, 240),
+    nSimulations: parseMetric(
+      pickFirstFromAliases(source, URL_PARAM_ALIASES.nSimulations),
+      DEFAULT_N_SIMULATIONS,
+      1,
+      100_000,
+    ),
   };
 }
 
@@ -74,23 +172,37 @@ function formatMetricValue(value: number): string {
   return Number.isInteger(value) ? String(value) : value.toFixed(1).replace(/\.0$/, "");
 }
 
-export function buildShareCardQuery(payload: ShareCardPayload): URLSearchParams {
+export function buildShareCardQuery(payload: ShareCardQueryPayload): URLSearchParams {
   const params = new URLSearchParams();
-  params.set("runway", formatMetricValue(payload.runway));
-  params.set("survival", formatMetricValue(payload.survival));
+
+  setMetric(params, "capital", payload.capital, 0, 1_000_000_000);
+  setMetric(params, "income", payload.income, 0, 1_000_000_000);
+  setMetric(params, "burn", payload.burn, 0, 1_000_000_000);
+  setMetric(params, "survival", payload.survival, 0, 100);
+  setMetric(params, "runway", payload.runway, 0, 999);
   params.set("verdict", clampText(payload.verdict, 140) || DEFAULT_VERDICT);
+  setMetric(params, "income_delay_months", payload.incomeDelayMonths, 0, 240);
+  setMetric(params, "capital_shock", payload.capitalShock, 0, 1_000_000_000);
+  setMetric(params, "burn_multiplier", payload.burnMultiplier, 0, 10);
+  setMetric(params, "months", payload.months, 1, 240);
+  setMetric(params, "n_simulations", payload.nSimulations, 1, 100_000);
+
   return params;
 }
 
-export function getSharePagePath(payload: ShareCardPayload): string {
+export function getSharePagePath(payload: ShareCardQueryPayload): string {
   return `/share?${buildShareCardQuery(payload).toString()}`;
 }
 
-export function getOgImagePath(payload: ShareCardPayload): string {
+export function getOgImagePath(payload: ShareCardQueryPayload): string {
   return `/api/og?${buildShareCardQuery(payload).toString()}`;
 }
 
 export function formatRunwayLabel(runway: number): string {
+  if (runway >= 120) {
+    return "120m+";
+  }
+
   return `${formatMetricValue(runway)}m`;
 }
 

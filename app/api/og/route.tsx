@@ -1,35 +1,84 @@
 import { ImageResponse } from "next/og";
 
-import { formatRunwayLabel, formatSurvivalLabel, normalizeShareCardPayload } from "@/app/lib/share-card";
-
 export const runtime = "edge";
+
+const FALLBACKS = {
+  capital: 50_000,
+  income: 0,
+  burn: 10_000,
+  survival: 0,
+};
+
+function readFiniteNumber(value: string | null, fallback: number) {
+  if (!value) {
+    return fallback;
+  }
+
+  const normalized = value.replace(/[$,%\s_]/g, "");
+  const parsed = Number(normalized);
+
+  return Number.isFinite(parsed) ? parsed : fallback;
+}
+
+function clamp(value: number, min: number, max: number) {
+  return Math.min(Math.max(value, min), max);
+}
+
+function readSurvival(value: string | null) {
+  const parsed = readFiniteNumber(value, FALLBACKS.survival);
+  const asPercent = parsed > 0 && parsed <= 1 ? parsed * 100 : parsed;
+
+  return Math.round(clamp(asPercent, 0, 100));
+}
+
+function readMoney(value: string | null, fallback: number) {
+  return Math.max(0, readFiniteNumber(value, fallback));
+}
+
+function getRunwayMonths(capital: number, income: number, burn: number) {
+  const monthlyDrain = Math.max(burn - income, 1);
+
+  return Math.max(0, Math.floor(capital / monthlyDrain));
+}
+
+function formatRunway(months: number) {
+  if (months >= 1_000) {
+    return "999+";
+  }
+
+  return String(months);
+}
+
+function truncate(value: string, limit: number) {
+  if (value.length <= limit) {
+    return value;
+  }
+
+  return `${value.slice(0, limit - 1).trimEnd()}...`;
+}
 
 export async function GET(request: Request) {
   const { searchParams } = new URL(request.url);
-  const shareCard = normalizeShareCardPayload({
-    runway: searchParams.get("runway") ?? undefined,
-    survival: searchParams.get("survival") ?? undefined,
-    verdict: searchParams.get("verdict") ?? undefined,
-  });
-  const verdict = shareCard.verdict;
-  const truncatedVerdict = verdict.length > 130 ? verdict.substring(0, 130) + '...' : verdict;
+  const capital = readMoney(searchParams.get("capital"), FALLBACKS.capital);
+  const income = readMoney(searchParams.get("income"), FALLBACKS.income);
+  const burn = readMoney(searchParams.get("burn"), FALLBACKS.burn);
+  const survival = readSurvival(searchParams.get("survival"));
+  const runwayMonths = getRunwayMonths(capital, income, burn);
+  const runwayLabel = formatRunway(runwayMonths);
+  const verdict = truncate(`My startup dies in ${runwayLabel} months. Beat that.`, 72);
 
   return new ImageResponse(
     (
       <div
         style={{
-          width: 1200,
-          height: 630,
+          width: "1200px",
+          height: "630px",
           display: "flex",
-          alignItems: "stretch",
-          justifyContent: "center",
-          padding: 32,
-          backgroundColor: "#0A0A0A",
-          backgroundImage:
-            "radial-gradient(circle at top right, rgba(157, 244, 255, 0.14), transparent 34%), linear-gradient(180deg, rgba(255,255,255,0.04), rgba(255,255,255,0.01))",
-          color: "#f5f7fa",
+          backgroundColor: "#05070a",
+          color: "#f4f8fb",
           fontFamily:
             'Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif',
+          overflow: "hidden",
         }}
       >
         <div
@@ -39,14 +88,9 @@ export async function GET(request: Request) {
             display: "flex",
             flexDirection: "column",
             justifyContent: "space-between",
-            padding: 56,
-            borderRadius: 34,
-            border: "1px solid rgba(255,255,255,0.09)",
-            backgroundColor: "#0A0A0A",
+            padding: "58px 70px 54px",
             backgroundImage:
-              "linear-gradient(180deg, rgba(255,255,255,0.05), rgba(255,255,255,0.01)), radial-gradient(circle at top right, rgba(173, 242, 255, 0.08), transparent 28%)",
-            boxShadow: "0 32px 90px rgba(0, 0, 0, 0.5)",
-            overflow: "hidden",
+              "radial-gradient(circle at 86% 18%, rgba(100, 240, 255, 0.22), transparent 30%), linear-gradient(135deg, rgba(255,255,255,0.08), rgba(255,255,255,0) 42%)",
           }}
         >
           <div
@@ -54,8 +98,7 @@ export async function GET(request: Request) {
               display: "flex",
               alignItems: "center",
               justifyContent: "space-between",
-              gap: 24,
-              flexShrink: 0,
+              width: "100%",
             }}
           >
             <div
@@ -63,20 +106,19 @@ export async function GET(request: Request) {
                 display: "flex",
                 alignItems: "center",
                 gap: 16,
+                fontSize: 22,
+                fontWeight: 700,
+                letterSpacing: "0.12em",
                 textTransform: "uppercase",
-                letterSpacing: "0.34em",
-                fontSize: 18,
-                color: "rgba(255,255,255,0.84)",
               }}
             >
               <div
                 style={{
-                  display: "flex",
-                  width: 14,
-                  height: 14,
-                  borderRadius: 999,
-                  backgroundColor: "#9df4ff",
-                  boxShadow: "0 0 32px rgba(157, 244, 255, 0.4)",
+                  width: 18,
+                  height: 18,
+                  borderRadius: 18,
+                  backgroundColor: "#70f6ff",
+                  boxShadow: "0 0 34px rgba(112, 246, 255, 0.8)",
                 }}
               />
               <div style={{ display: "flex" }}>MonteRun</div>
@@ -85,22 +127,13 @@ export async function GET(request: Request) {
             <div
               style={{
                 display: "flex",
-                alignItems: "center",
-                justifyContent: "center",
-                paddingLeft: 18,
-                paddingRight: 18,
-                height: 46,
-                borderRadius: 999,
-                border: "1px solid rgba(157, 244, 255, 0.22)",
-                color: "#9df4ff",
-                backgroundColor: "rgba(157, 244, 255, 0.06)",
+                color: "rgba(244, 248, 251, 0.58)",
+                fontSize: 17,
+                letterSpacing: "0.22em",
                 textTransform: "uppercase",
-                letterSpacing: "0.18em",
-                fontSize: 15,
-                flexShrink: 0,
               }}
             >
-              Deterministic share card
+              Deterministic runway card
             </div>
           </div>
 
@@ -108,202 +141,58 @@ export async function GET(request: Request) {
             style={{
               display: "flex",
               flexDirection: "column",
-              justifyContent: "space-between",
-              gap: 36,
-              flex: 1,
-              marginTop: 36,
-              marginBottom: 36,
-              overflow: "hidden",
+              gap: 18,
+              width: "100%",
             }}
           >
             <div
               style={{
                 display: "flex",
-                flexDirection: "row",
-                alignItems: "stretch",
-                justifyContent: "space-between",
-                gap: 36,
-                flexShrink: 0,
+                alignItems: "flex-end",
+                gap: 28,
+                width: "100%",
               }}
             >
               <div
                 style={{
                   display: "flex",
-                  flex: "1 1 0%",
-                  width: "52%",
-                  minWidth: 0,
-                  flexDirection: "column",
-                  justifyContent: "space-between",
-                  gap: 28,
-                  padding: 36,
-                  borderRadius: 26,
-                  backgroundColor: "#0f1114",
-                  border: "1px solid rgba(255,255,255,0.07)",
-                  overflow: "hidden",
+                  color: "#70f6ff",
+                  fontSize: 212,
+                  fontWeight: 800,
+                  lineHeight: 0.84,
+                  letterSpacing: "-0.065em",
                 }}
               >
-                <div
-                  style={{
-                    display: "flex",
-                    width: "100%",
-                    fontSize: 17,
-                    textTransform: "uppercase",
-                    letterSpacing: "0.26em",
-                    color: "rgba(255,255,255,0.52)",
-                  }}
-                >
-                  Runway
-                </div>
-
-                <div
-                  style={{
-                    display: "flex",
-                    alignItems: "flex-end",
-                    gap: 18,
-                    width: "100%",
-                  }}
-                >
-                  <div
-                    style={{
-                      display: "flex",
-                      fontSize: 138,
-                      lineHeight: 0.88,
-                      letterSpacing: "-0.08em",
-                      fontWeight: 700,
-                      flexShrink: 0,
-                    }}
-                  >
-                    {formatRunwayLabel(shareCard.runway).replace("m", "")}
-                  </div>
-                  <div
-                    style={{
-                      display: "flex",
-                      paddingBottom: 14,
-                      fontSize: 24,
-                      letterSpacing: "0.24em",
-                      textTransform: "uppercase",
-                      color: "#9df4ff",
-                      flexShrink: 0,
-                    }}
-                  >
-                    Months
-                  </div>
-                </div>
+                {survival}%
               </div>
-
               <div
                 style={{
                   display: "flex",
-                  flex: "1 1 0%",
-                  width: "44%",
-                  minWidth: 0,
-                  flexDirection: "column",
-                  justifyContent: "space-between",
-                  gap: 24,
-                  padding: 36,
-                  borderRadius: 26,
-                  backgroundColor: "#10151a",
-                  border: "1px solid rgba(255,255,255,0.07)",
-                  overflow: "hidden",
+                  paddingBottom: 18,
+                  color: "rgba(244, 248, 251, 0.86)",
+                  fontSize: 52,
+                  fontWeight: 750,
+                  lineHeight: 0.95,
+                  letterSpacing: "0.02em",
+                  textTransform: "uppercase",
                 }}
               >
-                <div
-                  style={{
-                    display: "flex",
-                    width: "100%",
-                    fontSize: 17,
-                    textTransform: "uppercase",
-                    letterSpacing: "0.26em",
-                    color: "rgba(255,255,255,0.52)",
-                  }}
-                >
-                  Survival 12m
-                </div>
-
-                <div
-                  style={{
-                    display: "flex",
-                    width: "100%",
-                    fontSize: 74,
-                    lineHeight: 0.92,
-                    letterSpacing: "-0.06em",
-                    fontWeight: 700,
-                    color: "#9df4ff",
-                    flexShrink: 0,
-                  }}
-                >
-                  {formatSurvivalLabel(shareCard.survival)}
-                </div>
-
-                <div
-                  style={{
-                    display: "flex",
-                    width: "100%",
-                    fontSize: 18,
-                    lineHeight: 1.5,
-                    color: "rgba(255,255,255,0.58)",
-                    flexWrap: "wrap",
-                  }}
-                >
-                  Real math. Zero motivational padding.
-                </div>
+                Survival
               </div>
             </div>
 
             <div
               style={{
                 display: "flex",
-                flexDirection: "column",
-                justifyContent: "space-between",
-                gap: 22,
-                padding: 36,
-                borderRadius: 26,
-                backgroundColor: "#0f1114",
-                border: "1px solid rgba(255,255,255,0.07)",
-                overflow: "hidden",
-                flex: 1,
-                minHeight: 0,
+                width: "840px",
+                color: "#f4f8fb",
+                fontSize: 54,
+                fontWeight: 720,
+                lineHeight: 1.04,
+                letterSpacing: "-0.03em",
               }}
             >
-              <div
-                style={{
-                  display: "flex",
-                  width: "100%",
-                  fontSize: 17,
-                  textTransform: "uppercase",
-                  letterSpacing: "0.26em",
-                  color: "rgba(255,255,255,0.52)",
-                }}
-              >
-                Verdict
-              </div>
-
-              <div
-                style={{
-                  display: "flex",
-                  width: "100%",
-                  flexWrap: "wrap",
-                  overflow: "hidden",
-                  alignItems: "flex-start",
-                  alignContent: "flex-start",
-                  fontSize: 46,
-                  lineHeight: 1.14,
-                  letterSpacing: "-0.04em",
-                  fontWeight: 600,
-                  minHeight: 0,
-                }}
-              >
-                <div
-                  style={{
-                    display: "flex",
-                    width: "100%",
-                    flexWrap: "wrap",
-                    overflow: "hidden",
-                  }}
-                >
-                  {truncatedVerdict}
-                </div>
-              </div>
+              {verdict}
             </div>
           </div>
 
@@ -312,16 +201,39 @@ export async function GET(request: Request) {
               display: "flex",
               alignItems: "center",
               justifyContent: "space-between",
-              gap: 24,
-              fontSize: 17,
-              letterSpacing: "0.18em",
-              textTransform: "uppercase",
-              color: "rgba(255,255,255,0.38)",
-              flexShrink: 0,
+              width: "100%",
+              borderTop: "1px solid rgba(244, 248, 251, 0.14)",
+              paddingTop: 28,
             }}
           >
-            <div style={{ display: "flex" }}>monterun.io</div>
-            <div style={{ display: "flex", color: "#9df4ff" }}>Math decides</div>
+            <div
+              style={{
+                display: "flex",
+                gap: 22,
+                color: "rgba(244, 248, 251, 0.62)",
+                fontSize: 20,
+                letterSpacing: "0.04em",
+              }}
+            >
+              <div style={{ display: "flex" }}>Capital ${Math.round(capital).toLocaleString("en-US")}</div>
+              <div style={{ display: "flex", color: "rgba(244, 248, 251, 0.28)" }}>/</div>
+              <div style={{ display: "flex" }}>Burn ${Math.round(burn).toLocaleString("en-US")}/mo</div>
+              <div style={{ display: "flex", color: "rgba(244, 248, 251, 0.28)" }}>/</div>
+              <div style={{ display: "flex" }}>Income ${Math.round(income).toLocaleString("en-US")}/mo</div>
+            </div>
+
+            <div
+              style={{
+                display: "flex",
+                color: "#70f6ff",
+                fontSize: 18,
+                fontWeight: 700,
+                letterSpacing: "0.18em",
+                textTransform: "uppercase",
+              }}
+            >
+              Math decides
+            </div>
           </div>
         </div>
       </div>

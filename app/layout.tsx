@@ -35,6 +35,8 @@ const inter = Inter({
   display: "swap",
 });
 
+const defaultOgImage = "/api/og?capital=5000000&income=450000&burn=950000&survival=37";
+
 export const metadata: Metadata = {
   metadataBase: resolveMetadataBase(),
   title: "MonteRun",
@@ -44,11 +46,20 @@ export const metadata: Metadata = {
     description: "MonteRun Analytics Monte Carlo surface",
     siteName: "MonteRun",
     type: "website",
+    images: [
+      {
+        url: defaultOgImage,
+        width: 1200,
+        height: 630,
+        alt: "MonteRun survival reality check card.",
+      },
+    ],
   },
   twitter: {
     card: "summary_large_image",
     title: "MonteRun",
     description: "MonteRun Analytics Monte Carlo surface",
+    images: [defaultOgImage],
   },
 };
 
