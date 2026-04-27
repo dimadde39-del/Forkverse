@@ -244,6 +244,8 @@ def _process_parse_flow(user_text: str, telegram_user_id: int, request_id: str) 
         months=params["months"],
         n_simulations=params["n_simulations"],
         income_delay_months=params.get("income_delay_months", 0),
+        capital_shock=params.get("capital_shock", 0.0),
+        burn_multiplier=params.get("burn_multiplier", 1.0),
     )
     simulation_data = parse_api._build_simulation_response(trajectories)
     parse_api._persist_scenario_state(

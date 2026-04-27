@@ -52,6 +52,8 @@ type SimulationParams = {
   monthly_burn: number;
   monthly_income: number;
   income_delay_months: number;
+  capital_shock: number;
+  burn_multiplier: number;
   months: number;
   n_simulations: number;
 };
@@ -76,6 +78,8 @@ const simulationParamKeys = [
   "monthly_burn",
   "monthly_income",
   "income_delay_months",
+  "capital_shock",
+  "burn_multiplier",
   "months",
   "n_simulations",
 ] as const satisfies readonly (keyof SimulationParams)[];
@@ -409,12 +413,16 @@ function cloneSimulationParams(params: SimulationParams): SimulationParams {
 function sanitizeSimulationParams(params: SimulationParams): SimulationParams {
   const months = Math.max(1, Math.round(params.months));
   const incomeDelayMonths = isFiniteNumber(params.income_delay_months) ? params.income_delay_months : 0;
+  const capitalShock = isFiniteNumber(params.capital_shock) ? params.capital_shock : 0;
+  const burnMultiplier = isFiniteNumber(params.burn_multiplier) ? params.burn_multiplier : 1;
 
   return {
     initial_capital: Math.max(0, Math.round(params.initial_capital)),
     monthly_burn: Math.max(0, Math.round(params.monthly_burn)),
     monthly_income: Math.max(0, Math.round(params.monthly_income)),
     income_delay_months: Math.min(MAX_INCOME_DELAY_MONTHS, months, Math.max(0, Math.round(incomeDelayMonths))),
+    capital_shock: Math.max(0, Math.round(capitalShock)),
+    burn_multiplier: Math.max(0, Math.round(burnMultiplier * 100) / 100),
     months,
     n_simulations: Math.max(1, Math.min(4000, Math.round(params.n_simulations))),
   };
@@ -492,6 +500,44 @@ function formatAxisCurrency(value: number, currencySymbol: string): string {
 
 function formatDelayMonths(value: number): string {
   return value > 0 ? `+${value}m` : "Live";
+}
+
+function formatBurnMultiplier(value: number): string {
+  return `${value.toFixed(2).replace(/\.?0+$/, "")}x`;
+}
+
+function getStressParamPatch(stress: AssumptionStress): Partial<SimulationParams> | null {
+  switch (stress.target) {
+    case "income_delay":
+      return { income_delay_months: stress.value };
+    case "capital_shock":
+      return { capital_shock: stress.value };
+    case "burn_multiplier":
+      return { burn_multiplier: stress.value };
+    default:
+      return null;
+  }
+}
+
+function formatStressLabel(stress: AssumptionStress | null, currencySymbol: string): string | null {
+  if (!stress) {
+    return null;
+  }
+
+  if (stress.label) {
+    return stress.label;
+  }
+
+  switch (stress.target) {
+    case "income_delay":
+      return `Income delay -> ${formatDelayMonths(stress.value)}`;
+    case "capital_shock":
+      return `Capital shock -> ${formatCurrency(stress.value, currencySymbol)}`;
+    case "burn_multiplier":
+      return `Burn multiplier -> ${formatBurnMultiplier(stress.value)}`;
+    default:
+      return null;
+  }
 }
 
 function clampText(value: string | null | undefined, limit: number): string {
@@ -643,6 +689,8 @@ function normalizeParseResponseData(value: unknown): ParseResponseData {
       monthly_burn: normalizeIntField(params.monthly_burn, "monthly_burn", 0),
       monthly_income: normalizeIntField(params.monthly_income, "monthly_income", 0),
       income_delay_months: normalizeOptionalIntField(params.income_delay_months, "income_delay_months", 0, 240),
+      capital_shock: normalizeOptionalFiniteNumber(params.capital_shock) ?? 0,
+      burn_multiplier: isFiniteNumber(params.burn_multiplier) ? params.burn_multiplier : 1,
       months: normalizeIntField(params.months, "months", 1),
       n_simulations: normalizeIntField(params.n_simulations, "n_simulations", 1, 4000),
     },
@@ -968,7 +1016,8 @@ export default function SimulatorClient() {
   const handleApplyAssumptionStress = useCallback(
     (assumption: ParserAssumption) => {
       const stress = assumption.suggested_stress;
-      if (stress?.target !== "income_delay") {
+      const stressPatch = stress ? getStressParamPatch(stress) : null;
+      if (!stressPatch) {
         return;
       }
 
@@ -983,7 +1032,7 @@ export default function SimulatorClient() {
 
         return sanitizeSimulationParams({
           ...baseParams,
-          income_delay_months: stress.value,
+          ...stressPatch,
         });
       });
       setAppliedAssumptionIds((currentIds) => {
@@ -1002,7 +1051,8 @@ export default function SimulatorClient() {
 
   const handleKeepAssumption = useCallback((assumption: ParserAssumption) => {
     const stress = assumption.suggested_stress;
-    if (stress?.target === "income_delay") {
+    const stressPatch = stress ? getStressParamPatch(stress) : null;
+    if (stressPatch) {
       setHasTouchedWhatIf(true);
       setWhatIfParams((currentParams) => {
         const baselineParams =
@@ -1011,18 +1061,27 @@ export default function SimulatorClient() {
           return currentParams;
         }
 
-        const stressedDelay = sanitizeSimulationParams({
+        const stressedParams = sanitizeSimulationParams({
           ...baselineParams,
-          income_delay_months: stress.value,
-        }).income_delay_months;
+          ...stressPatch,
+        });
 
-        if (currentParams.income_delay_months !== stressedDelay) {
+        const isCurrentStressApplied = Object.keys(stressPatch).every((key) => {
+          const paramKey = key as keyof SimulationParams;
+          return currentParams[paramKey] === stressedParams[paramKey];
+        });
+
+        if (!isCurrentStressApplied) {
           return currentParams;
         }
 
         return sanitizeSimulationParams({
           ...currentParams,
-          income_delay_months: baselineParams.income_delay_months,
+          ...Object.keys(stressPatch).reduce<Partial<SimulationParams>>((nextParams, key) => {
+            const paramKey = key as keyof SimulationParams;
+            nextParams[paramKey] = baselineParams[paramKey];
+            return nextParams;
+          }, {}),
         });
       });
     }
@@ -1524,12 +1583,10 @@ export default function SimulatorClient() {
                             <div className="mt-4 grid gap-3">
                               {assumptionsUnderPressure.map((assumption, index) => {
                                 const stress = assumption.suggested_stress;
-                                const canApplyStress = stress?.target === "income_delay";
+                                const canApplyStress = stress ? getStressParamPatch(stress) !== null : false;
                                 const isApplied = appliedAssumptionIds.has(assumption.id);
                                 const isKept = keptAssumptionIds.has(assumption.id);
-                                const stressLabel =
-                                  stress?.label ??
-                                  (canApplyStress ? `Income delay -> ${formatDelayMonths(stress.value)}` : null);
+                                const stressLabel = formatStressLabel(stress, currencySymbol);
 
                                 return (
                                   <article

@@ -57,10 +57,19 @@ MONTE_RUN_PARAM_FIELDS: Final[tuple[str, ...]] = (
     "flexible_expenses",
 )
 INCOME_DELAY_MONTHS_FIELD: Final[str] = "income_delay_months"
+CAPITAL_SHOCK_FIELD: Final[str] = "capital_shock"
+BURN_MULTIPLIER_FIELD: Final[str] = "burn_multiplier"
+MONTE_RUN_OPTIONAL_PARAM_FIELDS: Final[tuple[str, ...]] = (
+    CAPITAL_SHOCK_FIELD,
+    BURN_MULTIPLIER_FIELD,
+)
 CURRENCY_SYMBOL_FIELD: Final[str] = "currency_symbol"
 DEFAULT_CURRENCY_SYMBOL: Final[str] = "$"
 LEGACY_SIMULATION_MONTHS: Final[int] = 24
 LEGACY_SIMULATION_PATHS: Final[int] = 1_000
+SUGGESTED_STRESS_TARGETS: Final[frozenset[str]] = frozenset(
+    {"income_delay", "capital_shock", "burn_multiplier"}
+)
 
 EXTRACTION_SYSTEM_PROMPT: Final[str] = """
 Ты — MonteRun Extraction Layer.
@@ -110,8 +119,10 @@ NEVER ask follow-up questions. NEVER enter a conversational loop. If exact numbe
 - Critically analyze the user's plan. Find 1-2 weakest assumptions (e.g., fast sales, no unexpected costs) and suggest mathematical stress tests for the simulator levers.
 - assumptions must contain 1-2 of the user's weakest optimistic assumptions, especially fast revenue and missing unexpected costs.
 - Each assumption must be { "text": string, "risk": string, "suggested_stress": { "target": string, "value": number } }.
+- suggested_stress.target must be exactly one of: "income_delay", "capital_shock", "burn_multiplier".
 - For optimistic income timing, use suggested_stress.target = "income_delay" and a value like 3 for a 3-month delay.
-- For missing unexpected costs, use suggested_stress.target = "fixed_expenses" or "flexible_expenses" with a concrete non-negative stress value from the plan context when possible. Do not invent fake current params.
+- For a one-time cash threat, upfront surprise bill, equipment purchase, deposit, fine, medical/legal cost, refund, chargeback, or emergency cost, use suggested_stress.target = "capital_shock" with the one-time amount.
+- For recurring burn getting worse, underestimated monthly costs, ads CAC, rent, payroll, subscriptions, or "expenses may be higher", use suggested_stress.target = "burn_multiplier" with a multiplier like 1.2 or 1.5.
 - assumptions are parser notes only. Never change params to include the stress; MonteRun math will remain deterministic.
 - Detect the currency used in the text and return its symbol (e.g., '$', '€', '£', '₸'). If no currency is mentioned, default to '$'.
 - LANGUAGE RULE: Определи язык USER_MESSAGE. Ты ОБЯЗАН писать поля comment и question в ТОЧНО ТОМ ЖЕ ЯЗЫКЕ, что и USER_MESSAGE. Если пользователь пишет по-английски, отвечай по-английски. Если по-испански, отвечай по-испански. Всегда сохраняй холодный, циничный, финансово-терминальный тон независимо от языка.
@@ -839,6 +850,9 @@ def _extract_base_params_snapshot(parser_context_payload: Mapping[str, Any] | st
         }
         if base_params.get(INCOME_DELAY_MONTHS_FIELD) is not None:
             snapshot[INCOME_DELAY_MONTHS_FIELD] = base_params[INCOME_DELAY_MONTHS_FIELD]
+        for field in MONTE_RUN_OPTIONAL_PARAM_FIELDS:
+            if base_params.get(field) is not None:
+                snapshot[field] = base_params[field]
         if base_params.get(CURRENCY_SYMBOL_FIELD) is not None:
             snapshot[CURRENCY_SYMBOL_FIELD] = base_params[CURRENCY_SYMBOL_FIELD]
         return snapshot
@@ -852,6 +866,9 @@ def _extract_base_params_snapshot(parser_context_payload: Mapping[str, Any] | st
         }
         if previous_scenario.get(INCOME_DELAY_MONTHS_FIELD) is not None:
             snapshot[INCOME_DELAY_MONTHS_FIELD] = previous_scenario[INCOME_DELAY_MONTHS_FIELD]
+        for field in MONTE_RUN_OPTIONAL_PARAM_FIELDS:
+            if previous_scenario.get(field) is not None:
+                snapshot[field] = previous_scenario[field]
         if previous_scenario.get(CURRENCY_SYMBOL_FIELD) is not None:
             snapshot[CURRENCY_SYMBOL_FIELD] = previous_scenario[CURRENCY_SYMBOL_FIELD]
         return snapshot
@@ -1105,6 +1122,11 @@ def _extract_context_params(parser_input: str) -> dict[str, Any] | None:
         if income_delay_months is not None:
             params[INCOME_DELAY_MONTHS_FIELD] = income_delay_months
 
+        for field in MONTE_RUN_OPTIONAL_PARAM_FIELDS:
+            value = candidate.get(field)
+            if value is not None:
+                params[field] = value
+
         currency_symbol = candidate.get(CURRENCY_SYMBOL_FIELD)
         if currency_symbol is not None:
             params[CURRENCY_SYMBOL_FIELD] = currency_symbol
@@ -1127,6 +1149,11 @@ def _merge_extracted_params(
         income_delay_months = raw_params.get(INCOME_DELAY_MONTHS_FIELD)
         if income_delay_months is not None:
             merged[INCOME_DELAY_MONTHS_FIELD] = income_delay_months
+
+        for field in MONTE_RUN_OPTIONAL_PARAM_FIELDS:
+            value = raw_params.get(field)
+            if value is not None:
+                merged[field] = value
 
         currency_symbol = raw_params.get(CURRENCY_SYMBOL_FIELD)
         if currency_symbol is not None:
@@ -1210,6 +1237,9 @@ def _normalize_assumptions(value: Any) -> list[dict[str, Any]]:
         target = suggested_stress.get("target")
         if not isinstance(target, str) or not target.strip():
             continue
+        normalized_target = _clean_text(target)
+        if normalized_target not in SUGGESTED_STRESS_TARGETS:
+            continue
 
         try:
             stress_value = (
@@ -1222,13 +1252,15 @@ def _normalize_assumptions(value: Any) -> list[dict[str, Any]]:
 
         if not np.isfinite(stress_value) or stress_value < 0.0:
             continue
+        if normalized_target == BURN_MULTIPLIER_FIELD and stress_value < 1.0:
+            continue
 
         assumptions.append(
             {
                 "text": _clean_text(text),
                 "risk": _clean_text(risk),
                 "suggested_stress": {
-                    "target": _clean_text(target),
+                    "target": normalized_target,
                     "value": stress_value,
                 },
             }
@@ -1283,6 +1315,16 @@ def _normalize_extraction_payload(
         merged_params.get(INCOME_DELAY_MONTHS_FIELD),
         stage="extraction",
         default=0,
+    )
+    normalized_params[CAPITAL_SHOCK_FIELD] = _coerce_non_negative_float(
+        CAPITAL_SHOCK_FIELD,
+        merged_params.get(CAPITAL_SHOCK_FIELD, 0.0),
+        stage="extraction",
+    )
+    normalized_params[BURN_MULTIPLIER_FIELD] = _coerce_non_negative_float(
+        BURN_MULTIPLIER_FIELD,
+        merged_params.get(BURN_MULTIPLIER_FIELD, 1.0),
+        stage="extraction",
     )
     normalized_params[CURRENCY_SYMBOL_FIELD] = currency_symbol
     result = {
@@ -1346,6 +1388,16 @@ def _serialize_monte_run_params(
         except (TypeError, ValueError):
             return default
 
+    def _legacy_float_attr(name: str, default: float) -> float:
+        value = getattr(params, name, None)
+        if value is None or isinstance(value, bool):
+            return default
+
+        try:
+            return float(value)
+        except (TypeError, ValueError):
+            return default
+
     return {
         "cash": cash,
         "monthly_income": monthly_income,
@@ -1356,6 +1408,8 @@ def _serialize_monte_run_params(
         "months": _legacy_int_attr("months", LEGACY_SIMULATION_MONTHS),
         "n_simulations": _legacy_int_attr("n_simulations", LEGACY_SIMULATION_PATHS),
         "income_delay_months": _legacy_int_attr("income_delay_months", 0),
+        CAPITAL_SHOCK_FIELD: _legacy_float_attr(CAPITAL_SHOCK_FIELD, 0.0),
+        BURN_MULTIPLIER_FIELD: _legacy_float_attr(BURN_MULTIPLIER_FIELD, 1.0),
         CURRENCY_SYMBOL_FIELD: _normalize_currency_symbol(currency_symbol),
     }
 
@@ -1382,6 +1436,16 @@ def _build_monte_run_params(raw_params: Mapping[str, Any]) -> Any:
             raw_params.get(INCOME_DELAY_MONTHS_FIELD),
             stage="extraction",
             default=0,
+        ),
+        capital_shock=_coerce_non_negative_float(
+            CAPITAL_SHOCK_FIELD,
+            raw_params.get(CAPITAL_SHOCK_FIELD, 0.0),
+            stage="extraction",
+        ),
+        burn_multiplier=_coerce_non_negative_float(
+            BURN_MULTIPLIER_FIELD,
+            raw_params.get(BURN_MULTIPLIER_FIELD, 1.0),
+            stage="extraction",
         ),
     )
 
@@ -1479,6 +1543,8 @@ def _run_math_core(params: Any) -> dict[str, Any]:
             months=LEGACY_SIMULATION_MONTHS,
             n_simulations=LEGACY_SIMULATION_PATHS,
             income_delay_months=getattr(params, INCOME_DELAY_MONTHS_FIELD, 0),
+            capital_shock=getattr(params, CAPITAL_SHOCK_FIELD, 0.0),
+            burn_multiplier=getattr(params, BURN_MULTIPLIER_FIELD, 1.0),
         )
         chart_data = compute_metrics(paths)
         raw_result.update(chart_data)
@@ -1760,6 +1826,16 @@ def _call_groq(
             stage="extraction",
             default=0,
         ),
+        CAPITAL_SHOCK_FIELD: _coerce_non_negative_float(
+            CAPITAL_SHOCK_FIELD,
+            merged_params.get(CAPITAL_SHOCK_FIELD, 0.0),
+            stage="extraction",
+        ),
+        BURN_MULTIPLIER_FIELD: _coerce_non_negative_float(
+            BURN_MULTIPLIER_FIELD,
+            merged_params.get(BURN_MULTIPLIER_FIELD, 1.0),
+            stage="extraction",
+        ),
         "months": LEGACY_SIMULATION_MONTHS,
         "n_simulations": LEGACY_SIMULATION_PATHS,
         CURRENCY_SYMBOL_FIELD: _normalize_currency_symbol(merged_params.get(CURRENCY_SYMBOL_FIELD)),
@@ -1784,6 +1860,8 @@ def _run_simulation(
     months: Any = LEGACY_SIMULATION_MONTHS,
     n_simulations: Any = LEGACY_SIMULATION_PATHS,
     income_delay_months: Any = 0,
+    capital_shock: Any = 0.0,
+    burn_multiplier: Any = 1.0,
 ) -> list[list[float]]:
     _, _, simulate, _ = _get_math_core()
 
@@ -1795,6 +1873,8 @@ def _run_simulation(
             months=months,
             n_simulations=n_simulations,
             income_delay_months=income_delay_months,
+            capital_shock=capital_shock,
+            burn_multiplier=burn_multiplier,
         )
     except Exception as exc:
         LOGGER.exception("Legacy MonteRun trajectory simulation failed")

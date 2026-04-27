@@ -15,6 +15,8 @@ import numpy as np
 SCHEMA_VERSION: Final[str] = "2026-04"
 MAX_PAYLOAD_BYTES: Final[int] = 1_000_000
 INCOME_DELAY_MONTHS_FIELD: Final[str] = "income_delay_months"
+CAPITAL_SHOCK_FIELD: Final[str] = "capital_shock"
+BURN_MULTIPLIER_FIELD: Final[str] = "burn_multiplier"
 
 LOGGER = logging.getLogger(__name__)
 
@@ -157,6 +159,47 @@ def _coerce_non_negative_int(name: str, value: Any, *, default: int = 0) -> int:
         raise ApiProblem(
             "INVALID_PARAMS",
             f"{name} must be a non-negative integer",
+            {"field": name, "reason": "below_minimum", "minimum": 0},
+            False,
+        )
+
+    return coerced
+
+
+def _coerce_non_negative_float(name: str, value: Any, *, default: float = 0.0) -> float:
+    if value is None:
+        return default
+
+    if isinstance(value, bool):
+        raise ApiProblem(
+            "INVALID_PARAMS",
+            f"{name} must be a non-negative number",
+            {"field": name, "reason": "boolean_not_allowed"},
+            False,
+        )
+
+    try:
+        coerced = float(value)
+    except (TypeError, ValueError) as exc:
+        raise ApiProblem(
+            "INVALID_PARAMS",
+            f"{name} must be a non-negative number",
+            {"field": name, "reason": "non_numeric_value"},
+            False,
+        ) from exc
+
+    if not np.isfinite(coerced):
+        raise ApiProblem(
+            "INVALID_PARAMS",
+            f"{name} must be a finite number",
+            {"field": name, "reason": "non_finite_value"},
+            False,
+        )
+
+    if coerced < 0.0:
+        raise ApiProblem(
+            "INVALID_PARAMS",
+            f"{name} must be a non-negative number",
             {"field": name, "reason": "below_minimum", "minimum": 0},
             False,
         )
@@ -335,6 +378,16 @@ class handler(BaseHTTPRequestHandler):
             INCOME_DELAY_MONTHS_FIELD,
             normalized_params.get(INCOME_DELAY_MONTHS_FIELD),
             default=0,
+        )
+        normalized_params[CAPITAL_SHOCK_FIELD] = _coerce_non_negative_float(
+            CAPITAL_SHOCK_FIELD,
+            normalized_params.get(CAPITAL_SHOCK_FIELD),
+            default=0.0,
+        )
+        normalized_params[BURN_MULTIPLIER_FIELD] = _coerce_non_negative_float(
+            BURN_MULTIPLIER_FIELD,
+            normalized_params.get(BURN_MULTIPLIER_FIELD),
+            default=1.0,
         )
 
         return normalized_params

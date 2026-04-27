@@ -7,11 +7,19 @@ export type WhatIfSimulationParams = {
   monthly_burn: number;
   monthly_income: number;
   income_delay_months: number;
+  capital_shock: number;
+  burn_multiplier: number;
   months: number;
   n_simulations: number;
 };
 
-type EditableParamKey = "initial_capital" | "monthly_burn" | "monthly_income" | "income_delay_months";
+type EditableParamKey =
+  | "initial_capital"
+  | "monthly_burn"
+  | "monthly_income"
+  | "income_delay_months"
+  | "capital_shock"
+  | "burn_multiplier";
 
 type SliderDescriptor = {
   key: EditableParamKey;
@@ -37,6 +45,8 @@ const emptyParams: WhatIfSimulationParams = {
   monthly_burn: 0,
   monthly_income: 0,
   income_delay_months: 0,
+  capital_shock: 0,
+  burn_multiplier: 1,
   months: 12,
   n_simulations: 100,
 };
@@ -92,13 +102,29 @@ function formatDelayMonths(value: number): string {
   return value > 0 ? `+${value}m` : "Live";
 }
 
+function formatMultiplier(value: number): string {
+  return `${value.toFixed(2).replace(/\.?0+$/, "")}x`;
+}
+
 function clampSliderValue(key: EditableParamKey, value: number, params: WhatIfSimulationParams): number {
+  if (key === "burn_multiplier") {
+    return Math.max(0, Math.min(4, Math.round(value * 100) / 100));
+  }
+
   const rounded = Math.max(0, Math.round(value));
-  return key === "income_delay_months" ? Math.min(rounded, params.months, MAX_INCOME_DELAY_MONTHS) : rounded;
+  if (key === "income_delay_months") {
+    return Math.min(rounded, params.months, MAX_INCOME_DELAY_MONTHS);
+  }
+
+  return rounded;
 }
 
 function getManualInputMax(key: EditableParamKey, params: WhatIfSimulationParams): number {
-  return key === "income_delay_months" ? Math.max(0, Math.min(MAX_INCOME_DELAY_MONTHS, params.months)) : MAX_MONEY_PARAM;
+  if (key === "income_delay_months") {
+    return Math.max(0, Math.min(MAX_INCOME_DELAY_MONTHS, params.months));
+  }
+
+  return key === "burn_multiplier" ? 4 : MAX_MONEY_PARAM;
 }
 
 function sanitizeManualInputValue(
@@ -118,6 +144,10 @@ function sanitizeManualInputValue(
     return null;
   }
 
+  if (key === "burn_multiplier") {
+    return Math.min(Math.max(0, Math.round(parsedValue * 100) / 100), getManualInputMax(key, params));
+  }
+
   const roundedValue = Math.round(parsedValue);
   return Math.min(Math.max(0, roundedValue), getManualInputMax(key, params));
 }
@@ -128,6 +158,8 @@ function buildManualInputValues(params: WhatIfSimulationParams): Record<Editable
     monthly_burn: String(params.monthly_burn),
     monthly_income: String(params.monthly_income),
     income_delay_months: String(params.income_delay_months),
+    capital_shock: String(params.capital_shock),
+    burn_multiplier: String(params.burn_multiplier),
   };
 }
 
@@ -143,6 +175,7 @@ function buildSliders(params: WhatIfSimulationParams): SliderDescriptor[] {
   const capitalSlider = getMoneySliderConfig(1_000_000, params.initial_capital * 2);
   const incomeSlider = getMoneySliderConfig(100_000, params.monthly_income * 2, params.monthly_burn);
   const burnSlider = getMoneySliderConfig(100_000, params.monthly_burn * 2, params.monthly_income);
+  const shockSlider = getMoneySliderConfig(100_000, params.capital_shock * 2, params.initial_capital);
   const delayMax = Math.max(0, Math.min(MAX_INCOME_DELAY_MONTHS, params.months));
 
   return [
@@ -181,6 +214,24 @@ function buildSliders(params: WhatIfSimulationParams): SliderDescriptor[] {
       max: delayMax,
       step: 1,
       formatValue: formatDelayMonths,
+    },
+    {
+      key: "capital_shock",
+      label: "Внезапный расход",
+      eyebrow: "capital shock",
+      min: 0,
+      max: shockSlider.max,
+      step: shockSlider.step,
+      formatValue: formatCurrency,
+    },
+    {
+      key: "burn_multiplier",
+      label: "Множитель трат",
+      eyebrow: "burn multiplier",
+      min: 0.5,
+      max: 3,
+      step: 0.05,
+      formatValue: (value) => formatMultiplier(value),
     },
   ];
 }
@@ -221,6 +272,8 @@ export default function WhatIfControls({
     currentParams.monthly_burn,
     currentParams.monthly_income,
     currentParams.income_delay_months,
+    currentParams.capital_shock,
+    currentParams.burn_multiplier,
     currentParams.months,
   ]);
 

@@ -28,6 +28,8 @@ class MonteRunParams:
     fixed_expenses: float
     flexible_expenses: float
     income_delay_months: int = 0
+    capital_shock: float = 0.0
+    burn_multiplier: float = 1.0
 
 
 @dataclass(frozen=True, slots=True)
@@ -80,6 +82,8 @@ def _validate_params(params: MonteRunParams) -> MonteRunParams:
         fixed_expenses=_as_float("fixed_expenses", params.fixed_expenses, minimum=0.0),
         flexible_expenses=_as_float("flexible_expenses", params.flexible_expenses, minimum=0.0),
         income_delay_months=_as_int("income_delay_months", params.income_delay_months, minimum=0),
+        capital_shock=_as_float("capital_shock", params.capital_shock, minimum=0.0),
+        burn_multiplier=_as_float("burn_multiplier", params.burn_multiplier, minimum=0.0),
     )
 
 
@@ -130,19 +134,27 @@ def _simulate_capital_paths(
     )
     realized_income = np.multiply(params.monthly_income, income_noise, dtype=np.float64)
     realized_income = np.multiply(realized_income, time_masks.income_active, dtype=np.float64)
-    realized_flexible_expenses = np.multiply(params.flexible_expenses, flexible_noise, dtype=np.float64)
+    realized_fixed_expenses = params.fixed_expenses * params.burn_multiplier
+    realized_flexible_expenses = np.multiply(
+        params.flexible_expenses * params.burn_multiplier,
+        flexible_noise,
+        dtype=np.float64,
+    )
 
-    monthly_net = realized_income - params.fixed_expenses - realized_flexible_expenses
-    raw_capital = params.cash + np.cumsum(monthly_net, axis=1, dtype=np.float64)
+    monthly_net = realized_income - realized_fixed_expenses - realized_flexible_expenses
+    starting_cash = params.cash - params.capital_shock
+    raw_capital = starting_cash + np.cumsum(monthly_net, axis=1, dtype=np.float64)
 
     depleted = np.maximum.accumulate(raw_capital <= 0.0, axis=1)
+    if starting_cash <= 0.0:
+        depleted = np.full_like(depleted, True, dtype=np.bool_)
     capital_paths = np.where(depleted, 0.0, raw_capital)
 
     return capital_paths
 
 
 def _prepend_initial_cash(capital_paths: np.ndarray, cash: float) -> np.ndarray:
-    initial_column = np.full((capital_paths.shape[0], 1), float(cash), dtype=np.float64)
+    initial_column = np.full((capital_paths.shape[0], 1), max(float(cash), 0.0), dtype=np.float64)
     return np.concatenate((initial_column, capital_paths), axis=1)
 
 
@@ -252,10 +264,14 @@ def simulate(
     n_simulations: Any = LEGACY_MAX_SIMULATIONS,
     seed: Any = None,
     income_delay_months: Any = 0,
+    capital_shock: Any = 0.0,
+    burn_multiplier: Any = 1.0,
 ) -> np.ndarray:
     initial_capital_value = _as_float("initial_capital", initial_capital, minimum=0.0)
     monthly_burn_value = _as_float("monthly_burn", monthly_burn, minimum=0.0)
     monthly_income_value = _as_float("monthly_income", monthly_income, minimum=0.0)
+    capital_shock_value = _as_float("capital_shock", capital_shock, minimum=0.0)
+    burn_multiplier_value = _as_float("burn_multiplier", burn_multiplier, minimum=0.0)
     months_value = _as_int("months", months, minimum=1)
     n_simulations_value = _as_int(
         "n_simulations",
@@ -276,6 +292,8 @@ def simulate(
         fixed_expenses=monthly_burn_value,
         flexible_expenses=0.0,
         income_delay_months=income_delay_months_value,
+        capital_shock=capital_shock_value,
+        burn_multiplier=burn_multiplier_value,
     )
     validated_params = _validate_params(params)
     income_noise, flexible_noise = _generate_noise(
@@ -287,10 +305,10 @@ def simulate(
         validated_params,
         income_noise=income_noise,
         flexible_noise=flexible_noise,
-        income_delay_months=income_delay_months_value,
+        income_delay_months=validated_params.income_delay_months,
     )
 
-    return _prepend_initial_cash(capital_paths, validated_params.cash)
+    return _prepend_initial_cash(capital_paths, validated_params.cash - validated_params.capital_shock)
 
 
 def compute_metrics(paths: np.ndarray) -> dict[str, Any]:
