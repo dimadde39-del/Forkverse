@@ -137,7 +137,7 @@ def _format_currency(value: float) -> str:
     rounded = int(round(value))
     sign = "-" if rounded < 0 else ""
     absolute = abs(rounded)
-    return f"{sign}{absolute:,} ₸".replace(",", " ")
+    return f"{sign}${absolute:,}"
 
 
 def _format_axis_currency(value: float, _position: int) -> str:
@@ -346,7 +346,7 @@ def _build_ready_caption(first_name: str | None, params: Mapping[str, Any], simu
     months = int(params["months"])
     delay_months = int(params.get("income_delay_months", 0))
 
-    lead = "Сценарий готов" if not first_name else f"{first_name}, сценарий готов"
+    lead = "Scenario ready" if not first_name else f"{first_name}, scenario ready"
     lines = [
         f"*{_escape_markdown_v2(lead)}*",
         f"Survival {_escape_markdown_v2(f'{survival_probability:.1f}%')}",
@@ -360,7 +360,7 @@ def _build_ready_caption(first_name: str | None, params: Mapping[str, Any], simu
 
 
 def _build_error_text(message: str) -> str:
-    return f"*Не удалось обработать сценарий*\n{_escape_markdown_v2(message)}"
+    return f"*Could not process the scenario*\n{_escape_markdown_v2(message)}"
 
 
 def _extract_parser_text(parsed: Mapping[str, Any], field: str) -> str:

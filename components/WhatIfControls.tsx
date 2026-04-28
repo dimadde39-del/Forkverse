@@ -51,7 +51,7 @@ const emptyParams: WhatIfSimulationParams = {
   n_simulations: 100,
 };
 
-const moneyFormatter = new Intl.NumberFormat("ru-RU", {
+const moneyFormatter = new Intl.NumberFormat("en-US", {
   maximumFractionDigits: 0,
 });
 
@@ -59,7 +59,7 @@ const prefixMoneyFormatter = new Intl.NumberFormat("en-US", {
   maximumFractionDigits: 0,
 });
 
-const PREFIX_CURRENCY_SYMBOLS = new Set(["$", "€", "£"]);
+const PREFIX_CURRENCY_SYMBOLS = new Set(["$"]);
 const MAX_MONEY_PARAM = 1_000_000_000;
 const MAX_INCOME_DELAY_MONTHS = 12;
 
@@ -199,7 +199,7 @@ function buildSliders(params: WhatIfSimulationParams): SliderDescriptor[] {
     },
     {
       key: "monthly_burn",
-      label: "Monthly burn",
+      label: "Monthly Burn",
       eyebrow: "outflow",
       min: 0,
       max: burnSlider.max,
@@ -208,7 +208,7 @@ function buildSliders(params: WhatIfSimulationParams): SliderDescriptor[] {
     },
     {
       key: "income_delay_months",
-      label: "Задержка дохода (мес)",
+      label: "Income delay (months)",
       eyebrow: "timing",
       min: 0,
       max: delayMax,
@@ -217,7 +217,7 @@ function buildSliders(params: WhatIfSimulationParams): SliderDescriptor[] {
     },
     {
       key: "capital_shock",
-      label: "Внезапный расход",
+      label: "Capital shock",
       eyebrow: "capital shock",
       min: 0,
       max: shockSlider.max,
@@ -226,7 +226,7 @@ function buildSliders(params: WhatIfSimulationParams): SliderDescriptor[] {
     },
     {
       key: "burn_multiplier",
-      label: "Множитель трат",
+      label: "Burn multiplier",
       eyebrow: "burn multiplier",
       min: 0.5,
       max: 3,
@@ -400,7 +400,7 @@ export default function WhatIfControls({
                     <input
                       aria-label={
                         slider.key === "income_delay_months"
-                          ? "Задержка дохода (мес) precise value"
+                          ? "Income delay (months) precise value"
                           : `${slider.label} precise value`
                       }
                       className="what-if-number h-8 w-[7.5rem] rounded-full border border-white/12 bg-black/24 px-3 text-right font-mono text-[12px] text-white/88 shadow-[inset_0_1px_0_rgba(255,255,255,0.04)] outline-none transition placeholder:text-white/24 focus:border-emerald-200/70 focus:bg-black/36 focus:text-emerald-50 focus:shadow-[0_0_0_3px_rgba(16,185,129,0.11)] disabled:cursor-not-allowed disabled:opacity-50 sm:w-[8.5rem]"

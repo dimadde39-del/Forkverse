@@ -78,7 +78,7 @@ type DebouncedSimulationState<TParams extends SimulationRequestParams, TResult> 
 
 const DEFAULT_ENDPOINT = "/api/simulate";
 const DEFAULT_DELAY_MS = 300;
-const overloadedScenarioMessage = "Система перегружена анализом вашего сценария. Попробуйте описать план чуть короче.";
+const overloadedScenarioMessage = "The system is overloaded analyzing your scenario. Try describing the plan a bit shorter.";
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);

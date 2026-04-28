@@ -160,6 +160,7 @@ type SimulatorViewState = {
   clarificationContext: ClarificationContext | null;
   parseData: ParseResponseData | null;
   simulationData: SimulationResponseData | null;
+  simulationParams: SimulationParams | null;
   simulationMeta: ApiMeta | null;
   errorMessage: string | null;
 };
@@ -195,12 +196,21 @@ type ShareLinkModel = {
   sharePagePath: string;
 };
 
+type ResultMetricsViewModel = {
+  runwayMonths: number;
+  survivalPercent: number;
+};
+
+type DisplaySmartLever = SmartLever & {
+  displayImpactMonths: number | null;
+};
+
 type StressUrlState = {
   mode: string;
   factors: string[];
 };
 
-const moneyFormatter = new Intl.NumberFormat("ru-RU", {
+const moneyFormatter = new Intl.NumberFormat("en-US", {
   maximumFractionDigits: 0,
 });
 
@@ -208,11 +218,11 @@ const prefixMoneyFormatter = new Intl.NumberFormat("en-US", {
   maximumFractionDigits: 0,
 });
 
-const PREFIX_CURRENCY_SYMBOLS = new Set(["$", "€", "£"]);
+const PREFIX_CURRENCY_SYMBOLS = new Set(["$"]);
 
 const panelClass =
   "rounded-[28px] border border-white/10 bg-white/5 shadow-[0_24px_80px_rgba(0,0,0,0.24)] backdrop-blur-md";
-const overloadedScenarioMessage = "Система перегружена анализом вашего сценария. Попробуйте описать план чуть короче.";
+const overloadedScenarioMessage = "The system is overloaded analyzing your scenario. Try describing the plan a bit shorter.";
 
 class ApiRequestError extends Error {
   readonly status: number;
@@ -249,7 +259,7 @@ function getFriendlyErrorMessage(error: unknown): string {
     return error;
   }
 
-  return "Не удалось обработать сценарий. Попробуйте еще раз.";
+  return "Could not process the scenario. Try again.";
 }
 
 function getFriendlySimulationErrorMessage(error: Pick<DebouncedSimulationError, "message" | "status">): string {
@@ -558,12 +568,7 @@ function clampPct(value: number): number {
 }
 
 function normalizeCurrencySymbol(value: unknown): string {
-  if (typeof value !== "string") {
-    return "$";
-  }
-
-  const trimmed = value.trim();
-  return trimmed.length > 0 ? trimmed : "$";
+  return "$";
 }
 
 function isPrefixCurrencySymbol(currencySymbol: string): boolean {
@@ -769,6 +774,42 @@ function formatShareProbability(value: number): string {
   return `${clamped.toFixed(precision)}%`;
 }
 
+function normalizeProbabilityPercent(value: number): number {
+  return clampPct(value > 0 && value <= 1 ? value * 100 : value);
+}
+
+function estimateRunwayMonths(params: SimulationParams): number {
+  let capital = Math.max(0, params.initial_capital - params.capital_shock);
+  const monthlyBurn = params.monthly_burn * params.burn_multiplier;
+
+  for (let month = 1; month <= params.months; month += 1) {
+    const income = month > params.income_delay_months ? params.monthly_income : 0;
+    capital += income - monthlyBurn;
+
+    if (capital <= 0) {
+      return month;
+    }
+  }
+
+  return params.months;
+}
+
+function getDisplayImpactMonths(lever: SmartLever, currentParams: SimulationParams | null): number | null {
+  if (lever.impact_months !== null && lever.impact_months > 0) {
+    return lever.impact_months;
+  }
+
+  if (!currentParams) {
+    return null;
+  }
+
+  const baseRunwayMonths = estimateRunwayMonths(currentParams);
+  const patchedRunwayMonths = estimateRunwayMonths(applySmartLeverMathPatch(currentParams, lever.math_patch));
+  const impactMonths = patchedRunwayMonths - baseRunwayMonths;
+
+  return impactMonths > 0 ? impactMonths : null;
+}
+
 function formatShareTimestamp(iso: string): string {
   const normalized = iso.trim();
   const parsed = new Date(normalized);
@@ -837,12 +878,14 @@ function buildSimulationUrlSearchParams({
   params,
   baselineParams,
   simulationData,
+  resultMetrics,
   shareCard,
   currencySymbol,
 }: {
   params: SimulationParams;
   baselineParams: SimulationParams | null;
   simulationData: SimulationResponseData;
+  resultMetrics: ResultMetricsViewModel;
   shareCard: ShareCardViewModel | null;
   currencySymbol: string;
 }): URLSearchParams {
@@ -865,15 +908,8 @@ function buildSimulationUrlSearchParams({
     setSimulationParamSearchParams(searchParams, baselineParams, "base_");
   }
 
-  if (simulationData.base_runway_months !== null) {
-    searchParams.set("runway", formatUrlNumber(Math.round(simulationData.base_runway_months * 10) / 10));
-  }
-
-  if (simulationData.survival_probability_12m !== null) {
-    searchParams.set("survival", formatUrlPercent(simulationData.survival_probability_12m));
-  } else {
-    searchParams.set("survival", formatUrlPercent(simulationData.survival_probability));
-  }
+  searchParams.set("runway", formatUrlNumber(Math.round(resultMetrics.runwayMonths * 10) / 10));
+  searchParams.set("survival", formatUrlPercent(resultMetrics.survivalPercent));
 
   if (shareCard?.verdict) {
     searchParams.set("verdict", shareCard.verdict);
@@ -908,20 +944,20 @@ function CustomTooltip({ active, payload, currencySymbol }: CustomTooltipProps) 
 
   return (
     <div className="min-w-[232px] rounded-3xl border border-white/12 bg-[rgba(8,8,8,0.88)] px-4 py-3 shadow-[0_18px_60px_rgba(0,0,0,0.34)] backdrop-blur-xl sm:min-w-[268px]">
-      <div className="text-sm font-medium text-white">Месяц {point.month}</div>
+      <div className="text-sm font-medium text-white">Month {point.month}</div>
       <div className="mt-3 space-y-1.5 text-[12px] text-white/78">
         <div className="font-mono tabular-nums text-emerald-200">
-          ▲ P90: {formatCurrencySigned(point.p90, currencySymbol)} (топ 10%)
+          ▲ P90: {formatCurrencySigned(point.p90, currencySymbol)} (top 10%)
         </div>
         <div className="font-mono tabular-nums text-emerald-300">
-          ◆ P50: {formatCurrencySigned(point.p50, currencySymbol)} (медиана)
+          ◆ P50: {formatCurrencySigned(point.p50, currencySymbol)} (median)
         </div>
         <div className="font-mono tabular-nums text-white/72">
-          ▼ P10: {formatCurrencySigned(point.p10, currencySymbol)} (худшие 10%)
+          ▼ P10: {formatCurrencySigned(point.p10, currencySymbol)} (worst 10%)
         </div>
       </div>
       <div className="mt-3 border-t border-white/10 pt-3 font-mono text-[12px] text-white/64 tabular-nums">
-        Банкротство в этом месяце: {point.bankruptcyRisk.toFixed(0)}%
+        Bankruptcy this month: {point.bankruptcyRisk.toFixed(0)}%
       </div>
     </div>
   );
@@ -1048,6 +1084,7 @@ const initialViewState: SimulatorViewState = {
   clarificationContext: null,
   parseData: null,
   simulationData: null,
+  simulationParams: null,
   simulationMeta: null,
   errorMessage: null,
 };
@@ -1063,8 +1100,16 @@ export default function SimulatorClient() {
   const [appliedAssumptionIds, setAppliedAssumptionIds] = useState<Set<string>>(() => new Set());
   const [keptAssumptionIds, setKeptAssumptionIds] = useState<Set<string>>(() => new Set());
   const [appliedSmartLeverId, setAppliedSmartLeverId] = useState<string | null>(null);
-  const { status, chatHistory, clarificationContext, parseData, simulationData, simulationMeta, errorMessage } =
-    viewState;
+  const {
+    status,
+    chatHistory,
+    clarificationContext,
+    parseData,
+    simulationData,
+    simulationParams,
+    simulationMeta,
+    errorMessage,
+  } = viewState;
   const currencySymbol = parseData?.status === "ready" ? parseData.currency_symbol : "$";
   const assumptionsUnderPressure =
     parseData?.assumptions && parseData.assumptions.length > 0 ? parseData.assumptions : null;
@@ -1168,15 +1213,28 @@ export default function SimulatorClient() {
     return processTrajectories(trajectories);
   }, [simulationData?.spaghetti_sample]);
 
+  const resultMetrics = useMemo<ResultMetricsViewModel | null>(() => {
+    if (!simulationData || simulationData.base_runway_months === null) {
+      return null;
+    }
+
+    return {
+      runwayMonths: simulationData.base_runway_months,
+      survivalPercent: normalizeProbabilityPercent(
+        simulationData.survival_probability_12m ?? simulationData.survival_probability,
+      ),
+    };
+  }, [simulationData]);
+
   const chartSummary = useMemo(() => {
-    if (!simulationData || chartData.length === 0) {
+    if (!simulationData || !resultMetrics || chartData.length === 0) {
       return null;
     }
 
     const lastPoint = chartData[chartData.length - 1];
 
     return {
-      survivalPct: clampPct(simulationData.survival_probability * 100),
+      survivalPct: resultMetrics.survivalPercent,
       bankruptcyPct: clampPct(lastPoint.bankruptcyRisk),
       medianEndingBalance: lastPoint.p50,
       optimisticEndingBalance: lastPoint.p90,
@@ -1184,19 +1242,14 @@ export default function SimulatorClient() {
       sampleSize: simulationData.spaghetti_sample.length,
       horizon: chartData.length,
     };
-  }, [chartData, simulationData]);
+  }, [chartData, resultMetrics, simulationData]);
 
   const shareCard = useMemo<ShareCardViewModel | null>(() => {
-    const baseRunwayMonths = simulationData?.base_runway_months;
-    const survivalProbability12m = simulationData?.survival_probability_12m;
     const verdict = simulationData?.verdict;
     const comment = simulationData?.comment;
 
     if (
-      baseRunwayMonths === null ||
-      baseRunwayMonths === undefined ||
-      survivalProbability12m === null ||
-      survivalProbability12m === undefined ||
+      !resultMetrics ||
       typeof verdict !== "string" ||
       verdict.trim().length === 0 ||
       typeof comment !== "string" ||
@@ -1215,74 +1268,67 @@ export default function SimulatorClient() {
     return {
       timestampIso,
       timestampLabel: timestampIso ? formatShareTimestamp(timestampIso) : null,
-      runwayValue: formatRunwayMonths(baseRunwayMonths),
-      survivalValue: formatShareProbability(survivalProbability12m),
+      runwayValue: formatRunwayMonths(resultMetrics.runwayMonths),
+      survivalValue: formatShareProbability(resultMetrics.survivalPercent),
       verdict: normalizedVerdict,
       comment: normalizedComment,
     };
-  }, [simulationData, simulationMeta?.generated_at]);
+  }, [resultMetrics, simulationData?.comment, simulationData?.verdict, simulationMeta?.generated_at]);
 
   const parsedParams = parseData?.status === "ready" ? parseData.params : null;
   const readyParams = whatIfParams ?? parsedParams;
+  const escapeRoutes = useMemo<DisplaySmartLever[] | null>(() => {
+    if (!smartLevers) {
+      return null;
+    }
+
+    return smartLevers.map((lever) => ({
+      ...lever,
+      displayImpactMonths: getDisplayImpactMonths(lever, simulationParams ?? readyParams),
+    }));
+  }, [readyParams, simulationParams, smartLevers]);
 
   const shareLinks = useMemo<ShareLinkModel | null>(() => {
-    const baseRunwayMonths = simulationData?.base_runway_months;
-    const survivalProbability12m = simulationData?.survival_probability_12m;
     const verdict = shareCard?.verdict;
-    const survivalPercent =
-      typeof survivalProbability12m === "number" && survivalProbability12m > 0 && survivalProbability12m <= 1
-        ? survivalProbability12m * 100
-        : survivalProbability12m;
 
-    if (
-      !readyParams ||
-      baseRunwayMonths === null ||
-      baseRunwayMonths === undefined ||
-      survivalPercent === null ||
-      survivalPercent === undefined ||
-      !verdict
-    ) {
+    if (!simulationParams || !resultMetrics || !verdict) {
       return null;
     }
 
     const sharePayload = {
-      runway: baseRunwayMonths,
-      survival: survivalPercent,
+      runway: resultMetrics.runwayMonths,
+      survival: resultMetrics.survivalPercent,
       verdict,
-      capital: readyParams.initial_capital,
-      income: readyParams.monthly_income,
-      burn: readyParams.monthly_burn,
-      incomeDelayMonths: readyParams.income_delay_months,
-      capitalShock: readyParams.capital_shock,
-      burnMultiplier: readyParams.burn_multiplier,
-      months: readyParams.months,
-      nSimulations: readyParams.n_simulations,
+      capital: simulationParams.initial_capital,
+      income: simulationParams.monthly_income,
+      burn: simulationParams.monthly_burn,
+      incomeDelayMonths: simulationParams.income_delay_months,
+      capitalShock: simulationParams.capital_shock,
+      burnMultiplier: simulationParams.burn_multiplier,
+      months: simulationParams.months,
+      nSimulations: simulationParams.n_simulations,
     };
 
     return {
       ogImagePath: getOgImagePath(sharePayload),
       sharePagePath: getSharePagePath(sharePayload),
     };
-  }, [
-    readyParams,
-    shareCard?.verdict,
-    simulationData?.base_runway_months,
-    simulationData?.survival_probability_12m,
-  ]);
+  }, [resultMetrics, shareCard?.verdict, simulationParams]);
 
   const serializedSimulationUrlParams = useMemo(() => {
-    if (!readyParams || !simulationData) {
+    if (!simulationParams || !simulationData || !resultMetrics) {
       return null;
     }
 
     return buildSimulationUrlSearchParams({
-      params: readyParams,
+      params: simulationParams,
       baselineParams: whatIfBaselineParams,
       simulationData,
+      resultMetrics,
       shareCard,
       currencySymbol,
     }).toString();
-  }, [currencySymbol, readyParams, shareCard, simulationData, whatIfBaselineParams]);
+  }, [currencySymbol, resultMetrics, shareCard, simulationData, simulationParams, whatIfBaselineParams]);
 
   useEffect(() => {
     setCopyFeedback("idle");
@@ -1340,7 +1386,7 @@ export default function SimulatorClient() {
           ? "Simulating"
           : "Run simulation";
 
-  const handleWhatIfSuccess = useCallback((result: SimulationResponseData, meta: ApiMeta) => {
+  const handleWhatIfSuccess = useCallback((result: SimulationResponseData, meta: ApiMeta, params: SimulationParams) => {
     setViewState((current) => {
       const previousSimulation = current.simulationData;
       const nextLevers =
@@ -1356,6 +1402,7 @@ export default function SimulatorClient() {
           comment: result.comment ?? previousSimulation?.comment ?? null,
           levers: nextLevers,
         },
+        simulationParams: cloneSimulationParams(params),
         simulationMeta: meta,
         errorMessage: null,
       };
@@ -1524,7 +1571,7 @@ export default function SimulatorClient() {
     const isClarificationReply = status === "clarifying" && clarificationContext !== null;
     const planText = isClarificationReply ? clarificationContext.plan : trimmedDraft;
     const parseInput = isClarificationReply
-      ? `План: ${clarificationContext.plan}. Вопрос: ${clarificationContext.question}. Ответ: ${trimmedDraft}`
+      ? `Plan: ${clarificationContext.plan}. Question: ${clarificationContext.question}. Answer: ${trimmedDraft}`
       : trimmedDraft;
     const fallbackStatus: FlowStatus = isClarificationReply ? "clarifying" : simulationData ? "simulated" : "idle";
     const userMessage = createMessage("user", parseInput);
@@ -1542,6 +1589,7 @@ export default function SimulatorClient() {
       errorMessage: null,
       parseData: null,
       simulationData: isClarificationReply ? current.simulationData : null,
+      simulationParams: isClarificationReply ? current.simulationParams : null,
       simulationMeta: isClarificationReply ? current.simulationMeta : null,
       chatHistory: [...current.chatHistory, userMessage],
     }));
@@ -1577,7 +1625,9 @@ export default function SimulatorClient() {
       );
       const simulationCompleteMessage = createMessage(
         "ai",
-        `SIMULATION COMPLETE | SURVIVAL ${(normalizedSimulationData.survival_probability * 100).toFixed(1)}%`,
+        `SIMULATION COMPLETE | SURVIVAL ${normalizeProbabilityPercent(
+          normalizedSimulationData.survival_probability_12m ?? normalizedSimulationData.survival_probability,
+        ).toFixed(1)}%`,
       );
 
       setViewState((current) => ({
@@ -1586,6 +1636,7 @@ export default function SimulatorClient() {
         clarificationContext: null,
         parseData: normalizedParseData,
         simulationData: normalizedSimulationData,
+        simulationParams: cloneSimulationParams(sanitizeSimulationParams(normalizedParseData.params)),
         simulationMeta: parseEnvelope.meta,
         errorMessage: null,
         chatHistory: [...current.chatHistory, parserReadyMessage, simulationCompleteMessage],
@@ -1611,7 +1662,7 @@ export default function SimulatorClient() {
           className="fixed bottom-5 left-1/2 z-50 -translate-x-1/2 rounded-full border border-emerald-200/24 bg-[rgba(5,12,10,0.92)] px-5 py-3 text-sm font-medium text-emerald-100 shadow-[0_18px_70px_rgba(0,0,0,0.42)] backdrop-blur-xl"
           role="status"
         >
-          Ссылка скопирована
+          Link copied
         </div>
       ) : null}
 
@@ -1685,8 +1736,8 @@ export default function SimulatorClient() {
                   onChange={(event) => setDraft(event.target.value)}
                   placeholder={
                     status === "clarifying"
-                      ? "Введите ответ на уточняющий вопрос..."
-                      : "Например: капитал 8 млн, burn 950к, доход 700к, доход стартует через 3 месяца, горизонт 18 месяцев."
+                      ? "Enter the answer to the clarification question..."
+                      : "Example: cash $80,000, monthly burn $9,500, income $7,000, income starts in 3 months, horizon 18 months."
                   }
                   spellCheck={false}
                   value={draft}
@@ -2072,9 +2123,9 @@ export default function SimulatorClient() {
                             ) : null}
                           </div>
 
-                          {smartLevers ? (
+                          {escapeRoutes ? (
                             <div className="mt-4 grid gap-3 lg:grid-cols-3">
-                              {smartLevers.map((lever, index) => {
+                              {escapeRoutes.map((lever, index) => {
                                 const isApplied = appliedSmartLeverId === lever.id;
                                 const patchEffect = formatSmartLeverPatchEffect(
                                   lever.math_patch,
@@ -2110,8 +2161,8 @@ export default function SimulatorClient() {
                                     </span>
                                     <span className="mt-auto flex items-center justify-between gap-3 border-t border-white/10 pt-3">
                                       <span className="font-mono text-[11px] uppercase tracking-[0.14em] text-white/46">
-                                        {lever.impact_months !== null
-                                          ? formatImpactMonths(lever.impact_months)
+                                        {lever.displayImpactMonths !== null
+                                          ? formatImpactMonths(lever.displayImpactMonths)
                                           : "Impact recalculated"}
                                       </span>
                                       <span className="font-mono text-[11px] uppercase tracking-[0.14em] text-emerald-200">

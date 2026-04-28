@@ -40,11 +40,11 @@ DEFAULT_INPUT_COST_PER_MILLION = Decimal("0.14")
 DEFAULT_OUTPUT_COST_PER_MILLION = Decimal("0.28")
 
 SYSTEM_PROMPT = (
-    "Ты — соло-фаундер из Алматы, собирающий SaaS-проект MonteRun (движок симуляции финансового выживания). "
-    "Твой стиль в X (Twitter): сухой, технический, отстраненный, очень краткий. Ты пишешь как живой уставший разработчик, а не как маркетолог или ИИ. "
-    "Никакого пафоса, никаких восклицательных знаков, никаких лекций и нравоучений. "
-    "Используй технический сленг естественно (numpy, LLM, парсер, хардкод, рефакторинг). "
-    "Ты просто делишься логами разработки (Build in Public). Если пишешь про глупость юзеров, делай это мимоходом, как очевидный математический факт, а не как попытку задеть."
+    "You are a solo founder from Almaty building MonteRun, a SaaS engine for financial survival simulation. "
+    "Your X (Twitter) style is dry, technical, detached, and very short. You write like a tired real developer, not a marketer or AI. "
+    "No hype, no exclamation marks, no lectures, no moralizing. "
+    "Use technical slang naturally, such as numpy, LLM, parser, hardcode, and refactoring. "
+    "You are sharing development logs as Build in Public. If you mention user mistakes, treat them as obvious mathematical facts, not as personal attacks."
 )
 
 
@@ -575,27 +575,27 @@ def build_user_prompt(run_date: date, daily_text: str, paperclip_context: str) -
     context_block = "\n".join(f"- {line}" for line in marketing_context) if marketing_context else "- No explicit marketing lines found in the Daily Note."
 
     return (
-        f"Дата запуска: {run_date.isoformat()}\n"
-        "Продукт: MonteRun calculator.\n"
-        "Задача: написать ОДИН короткий твит на основе лога разработки. \n"
-        "ЖЕСТКИЕ ПРАВИЛА ФОРМАТА: \n"
-        "- Верни ТОЛЬКО текст твита. Больше ничего.\n"
-        "- Никаких заголовков (например, 'Main Post', 'Draft').\n"
-        "- Никаких хэштегов (вообще ни одного).\n"
-        "- Никаких списков, буллитов и секций 'Why It Works'.\n"
-        "- Пиши так, будто набрал текст с телефона за 10 секунд: минимум пунктуации, максимум 2-3 предложения.\n\n"
-        "Контекст из Daily Note:\n"
+        f"Run date: {run_date.isoformat()}\n"
+        "Product: MonteRun calculator.\n"
+        "Task: write ONE short tweet based on the development log. \n"
+        "STRICT FORMAT RULES: \n"
+        "- Return ONLY the tweet text. Nothing else.\n"
+        "- No headings such as 'Main Post' or 'Draft'.\n"
+        "- No hashtags at all.\n"
+        "- No lists, bullets, or 'Why It Works' sections.\n"
+        "- Write as if typed from a phone in 10 seconds: minimal punctuation, maximum 2-3 sentences.\n\n"
+        "Context from Daily Note:\n"
         f"{context_block}\n\n"
         "Paperclip context:\n"
         f"{paperclip_context}\n\n"
-        "Верни только Markdown в таком формате:\n"
+        "Return only Markdown in this format:\n"
         "## Main Post\n"
-        "<готовый пост для X, до 280 символов>\n\n"
+        "<finished X post, up to 280 characters>\n\n"
         "## Alternate Hooks\n"
-        "- <вариант 1>\n"
-        "- <вариант 2>\n\n"
+        "- <variant 1>\n"
+        "- <variant 2>\n\n"
         "## Why It Works\n"
-        "<1-2 предложения, почему это продаёт калькулятор>\n"
+        "<1-2 sentences explaining why this sells the calculator>\n"
     )
 
 

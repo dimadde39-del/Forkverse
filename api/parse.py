@@ -30,6 +30,8 @@ ENV_PATH: Final[Path] = PROJECT_ROOT / ".env"
 DEEPSEEK_BASE_URL: Final[str] = "https://api.deepseek.com/v1"
 DEEPSEEK_MODEL: Final[str] = "deepseek-v4-flash"
 DEEPSEEK_API_KEY_ENV: Final[str] = "DEEPSEEK_API_KEY"
+DEEPSEEK_EXTRACTION_MAX_TOKENS: Final[int] = 1_000
+DEEPSEEK_ROAST_MAX_TOKENS: Final[int] = 320
 
 SUPABASE_URL_ENV: Final[str] = "SUPABASE_URL"
 SUPABASE_SERVICE_ROLE_KEY_ENV: Final[str] = "SUPABASE_SERVICE_ROLE_KEY"
@@ -86,8 +88,8 @@ SMART_LEVER_PATCH_FIELDS: Final[frozenset[str]] = frozenset(
 )
 
 EXTRACTION_SYSTEM_PROMPT: Final[str] = """
-Ты — MonteRun Extraction Layer.
-Твоя задача: вытащить из текста пользователя 5 полей для MonteRunParams:
+You are the MonteRun Extraction Layer.
+Your job is to extract five fields for MonteRunParams from the user's text:
 - cash
 - monthly_income
 - fixed_expenses
@@ -96,10 +98,11 @@ EXTRACTION_SYSTEM_PROMPT: Final[str] = """
 
 CRITICAL RULE:
 NEVER ask follow-up questions. NEVER enter a conversational loop. If exact numbers are missing, CALCULATE them from context (e.g., '3 clients for $2000' = $6000 monthly income) or make pessimistic assumptions. You MUST ALWAYS output the final JSON and nothing else.
+NO REASONING OUTPUT: Do not write chain-of-thought, analysis, explanation, preamble, apology, markdown, or prose before/after JSON. Return raw JSON only. Start with { and end with }.
 
-Верни строго JSON-объект и ничего кроме JSON.
+Return a strict JSON object and nothing except JSON.
 
-Формат READY:
+READY format:
 {
   "status": "ready",
   "params": {
@@ -108,13 +111,13 @@ NEVER ask follow-up questions. NEVER enter a conversational loop. If exact numbe
     "fixed_expenses": number,
     "flexible_expenses": number,
     "income_delay_months": integer,
-    "currency_symbol": string
+    "currency_symbol": "$"
   },
   "question": null,
-  "comment": "короткая сухая строка",
+  "comment": "short dry English line",
   "assumptions": [
     {
-      "text": "самое слабое/оптимистичное утверждение пользователя",
+      "text": "the user's weakest optimistic assumption",
       "risk": "High risk: B2B sales usually take 90+ days",
       "suggested_stress": { "target": "income_delay", "value": 3 }
     }
@@ -138,10 +141,10 @@ NEVER ask follow-up questions. NEVER enter a conversational loop. If exact numbe
   ]
 }
 
-Правила:
+Rules:
 - Always return status = "ready" with final params. Do not return needs_clarification; that status exists only for legacy compatibility outside this prompt.
-- Используй BASE_CONTEXT_JSON как доверенную память, если он передан.
-- Если в USER_MESSAGE есть явное новое число, оно важнее контекста.
+- Use BASE_CONTEXT_JSON as trusted memory when it is provided.
+- If USER_MESSAGE contains an explicit new number, it overrides older context.
 - Calculate derived metrics instead of asking: multiply count * price, sum recurring cost categories, infer monthly amounts when text clearly says per month/monthly, use lower income ranges and upper expense ranges, and choose pessimistic defaults when unavoidable.
 - Keep stress values only inside assumptions[*].suggested_stress. Do not put stress values into params.
 - Extract how many months the user will wait before their first revenue. Default is 0.
@@ -163,53 +166,52 @@ NEVER ask follow-up questions. NEVER enter a conversational loop. If exact numbe
 - Every math_patch must change at least one math-core input. Do not include impact_months, runway, probability, survival rate, verdict, or any calculated result inside smart_levers. MonteRun code will calculate impact deterministically.
 - Bind every lever to parsed facts: if the user is a freelancer, solo founder, student, or employee with no staff/payroll, do not suggest firing staff, cutting payroll, renegotiating team salaries, or other advice that assumes employees. If staff/payroll is not explicitly present, staff-related levers are forbidden.
 - Do not invent assets, employees, inventory, loans, clients, or dependents that are not stated or strongly implied by the user context.
-- Detect the currency used in the text and return its symbol (e.g., '$', '€', '£', '₸'). If no currency is mentioned, default to '$'.
-- LANGUAGE RULE: Определи язык USER_MESSAGE. Ты ОБЯЗАН писать поля comment и question в ТОЧНО ТОМ ЖЕ ЯЗЫКЕ, что и USER_MESSAGE. Если пользователь пишет по-английски, отвечай по-английски. Если по-испански, отвечай по-испански. Всегда сохраняй холодный, циничный, финансово-терминальный тон независимо от языка.
+- Currency is hard-locked to USD. Always return "currency_symbol": "$" even when the user mentions another currency.
+- LANGUAGE RULE: All user-facing text fields must be English, including comment, question, assumptions[*].text, assumptions[*].risk, and smart_levers[*].title.
 - If a field is not explicit even after BASE_CONTEXT_JSON, prefer a pessimistic, clearly finance-grounded default over clarification.
-- Все числа должны быть неотрицательными.
-- Если пользователь дал диапазон дохода, бери нижнюю границу.
-- Если пользователь дал диапазон расходов, бери верхнюю границу.
-- fixed_expenses = обязательные повторяющиеся траты.
+- All numbers must be non-negative.
+- If the user gives an income range, use the lower bound.
+- If the user gives an expense range, use the upper bound.
+- fixed_expenses = mandatory recurring expenses.
 - flexible_expenses = discretionary, variable, optional spend.
-- Не упоминай старый бренд. Только MonteRun.
-- Не добавляй markdown, объяснения, code fences, лишние ключи или текст вне JSON.
+- Do not mention the old brand. Only MonteRun.
+- Do not add markdown, explanations, code fences, extra keys, or text outside JSON.
 """.strip()
 
 ROAST_SYSTEM_PROMPT: Final[str] = """
-Ты — MonteRun Roast Layer.
-На входе у тебя Original user request, extracted_params и simulation.
-Ты не считаешь математику и не меняешь числа. Ты только формулируешь вердикт.
+You are the MonteRun Roast Layer.
+Input includes Original user request, extracted_params, and simulation.
+You do not calculate math and you do not change numbers. You only phrase the verdict.
+CRITICAL OUTPUT RULE: Do not write chain-of-thought, analysis, explanation, preamble, apology, markdown, or prose before/after JSON. Return raw JSON only. Start with { and end with }.
 
-Верни строго JSON-объект:
+Return a strict JSON object:
 {
-  "verdict": "[INSERT VERDICT IN USER LANGUAGE]",
-  "comment": "[INSERT 2-4 SHORT SENTENCES IN USER LANGUAGE]",
+  "verdict": "[INSERT ENGLISH VERDICT]",
+  "comment": "[INSERT 2-4 SHORT ENGLISH SENTENCES]",
   "levers": [
-    { "action": "[INSERT LEVER LABEL IN USER LANGUAGE]" },
-    { "action": "[INSERT LEVER LABEL IN USER LANGUAGE]" },
-    { "action": "[INSERT LEVER LABEL IN USER LANGUAGE]" }
+    { "action": "[INSERT ENGLISH LEVER LABEL]" },
+    { "action": "[INSERT ENGLISH LEVER LABEL]" },
+    { "action": "[INSERT ENGLISH LEVER LABEL]" }
   ]
 }
 
-Правила:
-- CRITICAL: The output MUST be in the exact same language as the Original user request. Do not default to Russian unless the user wrote in Russian.
-- CRITICAL: ALL text properties must be in the user's detected language, including verdict, comment, and the action text inside each lever entry in the levers array. If the user writes in English, reply in English. If Spanish, reply in Spanish. Always maintain the cold, cynical, financial-terminal tone regardless of the language.
-- LANGUAGE RULE: Detect the language of the Original user request and apply it to every user-facing text field in the roast output.
-- Тон: циничный, высокомерный, techno-trash из Алматы.
-- Уместно использовать слова hustle, cooked, runway, ngmi, survival rate.
-- Опирайся только на присланные числа и levers.
-- Если сценарий плохой, говори жёстко и прямо.
-- Если levers слабые, высмеивай это.
-- levers[*].action должны сохранять тот же экономический смысл и тот же порядок, что и входные simulation.levers. Разрешено только локализовать формулировку, не менять сам совет.
-- Не используй markdown, списки, code fences и лишние поля.
-- Не упоминай старый бренд. Только MonteRun.
+Rules:
+- CRITICAL: Every user-facing text property must be English, including verdict, comment, and levers[*].action.
+- Tone: cold, cynical, financial-terminal, techno-trash from Almaty.
+- It is appropriate to use words like hustle, cooked, runway, ngmi, and survival rate.
+- Rely only on the provided numbers and levers.
+- If the scenario is bad, say it hard and directly.
+- If levers are weak, call that out.
+- levers[*].action must preserve the same economic meaning and order as simulation.levers. Only rephrase the label; do not change the advice.
+- Do not use markdown, lists, code fences, or extra fields.
+- Do not mention the old brand. Only MonteRun.
 """.strip()
 
 FIELD_QUESTIONS: Final[dict[str, str]] = {
-    "cash": "Сколько у тебя сейчас денег на руках?",
-    "monthly_income": "Какой у тебя средний доход в месяц?",
-    "fixed_expenses": "Сколько у тебя обязательных фиксированных расходов в месяц?",
-    "flexible_expenses": "Сколько у тебя в месяц уходит на гибкие и discretionary траты?",
+    "cash": "How much cash do you have right now?",
+    "monthly_income": "What is your average monthly income?",
+    "fixed_expenses": "What are your mandatory fixed expenses per month?",
+    "flexible_expenses": "What do you spend monthly on flexible or discretionary costs?",
 }
 
 LOGGER = logging.getLogger(__name__)
@@ -395,31 +397,7 @@ def _coerce_non_negative_int(
 
 
 def _normalize_currency_symbol(value: Any) -> str:
-    if not isinstance(value, str):
-        return DEFAULT_CURRENCY_SYMBOL
-
-    normalized = _clean_text(value)
-    if not normalized:
-        return DEFAULT_CURRENCY_SYMBOL
-
-    currency_aliases = {
-        "$": "$",
-        "usd": "$",
-        "dollar": "$",
-        "dollars": "$",
-        "€": "€",
-        "eur": "€",
-        "euro": "€",
-        "euros": "€",
-        "£": "£",
-        "gbp": "£",
-        "pound": "£",
-        "pounds": "£",
-        "₸": "₸",
-        "kzt": "₸",
-        "tenge": "₸",
-    }
-    return currency_aliases.get(normalized.casefold(), normalized)
+    return DEFAULT_CURRENCY_SYMBOL
 
 
 def _coerce_positive_int(name: str, value: Any) -> int:
@@ -587,6 +565,7 @@ def _call_deepseek_json(
     user_content: str,
     stage: str,
     temperature: float,
+    max_tokens: int,
 ) -> dict[str, Any]:
     client = _get_deepseek_client()
 
@@ -599,6 +578,8 @@ def _call_deepseek_json(
             ],
             response_format={"type": "json_object"},
             temperature=temperature,
+            max_tokens=max_tokens,
+            extra_body={"thinking": {"type": "disabled"}},
         )
     except Exception as exc:
         LOGGER.exception("DeepSeek %s request failed", stage)
@@ -1249,7 +1230,7 @@ def _apply_pessimistic_param_defaults(value: Mapping[str, Any]) -> dict[str, Any
 
 def _build_clarification_question(missing_fields: list[str]) -> str:
     if not missing_fields:
-        return "Что у тебя сейчас по cash, income и расходам?"
+        return "What are your current cash, income, and expenses?"
 
     return FIELD_QUESTIONS[missing_fields[0]]
 
@@ -1492,6 +1473,7 @@ def _call_extraction_stage(parser_input: str) -> dict[str, Any]:
         user_content=parser_input,
         stage="extraction",
         temperature=0.1,
+        max_tokens=DEEPSEEK_EXTRACTION_MAX_TOKENS,
     )
     return _normalize_extraction_payload(raw_payload, _extract_context_params(parser_input))
 
@@ -1952,6 +1934,7 @@ def _call_roast_stage(
         user_content=roast_input,
         stage="roast",
         temperature=0.9,
+        max_tokens=DEEPSEEK_ROAST_MAX_TOKENS,
     )
 
     return _normalize_roast_payload(raw_payload)
