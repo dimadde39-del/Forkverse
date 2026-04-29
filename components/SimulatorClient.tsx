@@ -1263,8 +1263,6 @@ export default function SimulatorClient() {
     return parseData?.smart_levers && parseData.smart_levers.length > 0 ? parseData.smart_levers : null;
   }, [parseData?.smart_levers, simulationData?.levers]);
 
-  const rawSeriesKeys = useMemo(() => Array.from({ length: 50 }, (_, index) => `sim${index}` as SimKey), []);
-
   const chartData = useMemo<MonteCarloChartPoint[]>(() => {
     const trajectories = simulationData?.spaghetti_sample ?? [];
 
@@ -1327,9 +1325,9 @@ export default function SimulatorClient() {
           bankruptcyRisk: (bankruptCount / sanitized.length) * 100,
         };
 
-        for (let simIndex = 0; simIndex < 50; simIndex += 1) {
-          point[`sim${simIndex}` as SimKey] = sanitized[simIndex]?.[month] ?? null;
-        }
+        sanitized.forEach((path, simIndex) => {
+          point[`sim${simIndex}` as SimKey] = path[month] ?? null;
+        });
 
         return point;
       });
@@ -1376,6 +1374,11 @@ export default function SimulatorClient() {
       horizon: chartData.length,
     };
   }, [chartData, resultMetrics, simulationData]);
+
+  const rawSeriesKeys = useMemo(
+    () => Array.from({ length: chartSummary?.sampleSize ?? 0 }, (_, index) => `sim${index}` as SimKey),
+    [chartSummary?.sampleSize],
+  );
 
   const shareCard = useMemo<ShareCardViewModel | null>(() => {
     const verdict = simulationData?.verdict;
@@ -1934,9 +1937,11 @@ export default function SimulatorClient() {
                   <div className="text-[11px] uppercase tracking-[0.22em] text-white/46">{composerLabel}</div>
                   <div className="mt-2 text-lg font-medium text-white">Scenario composer</div>
                 </div>
-                <div className="rounded-full border border-white/10 bg-white/5 px-3 py-1.5 font-mono text-[11px] text-white/60 tabular-nums">
-                  {readyParams ? `${readyParams.n_simulations} sims` : "100 sims"}
-                </div>
+                {readyParams ? (
+                  <div className="rounded-full border border-white/10 bg-white/5 px-3 py-1.5 font-mono text-[11px] text-white/60 tabular-nums">
+                    {readyParams.n_simulations} sims
+                  </div>
+                ) : null}
               </div>
               <form className="space-y-4" onSubmit={handleSubmit}>
                 {clarificationContext ? (
@@ -2027,14 +2032,10 @@ export default function SimulatorClient() {
                   <div>
                     <div className="text-[11px] uppercase tracking-[0.22em] text-white/46">Monte Carlo output</div>
                     <div className="mt-2 text-xl font-medium text-white">Confidence band with raw trajectory texture</div>
-                    <p className="mt-2 max-w-2xl text-sm leading-6 text-white/56">
-                      Fifty background paths stay visible, while the confidence envelope and quantiles sit above them as
-                      the primary read.
-                    </p>
                   </div>
 
                   {chartSummary ? (
-                    <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+                    <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
                       <div className="rounded-3xl border border-white/10 bg-white/5 px-4 py-3">
                         <div className="text-[11px] uppercase tracking-[0.18em] text-white/46">Survival</div>
                         <div className="mt-2 font-mono text-base text-white tabular-nums">
@@ -2051,12 +2052,6 @@ export default function SimulatorClient() {
                         <div className="text-[11px] uppercase tracking-[0.18em] text-white/46">Median End</div>
                         <div className="mt-2 font-mono text-base text-white tabular-nums">
                           {formatCurrency(chartSummary.medianEndingBalance, currencySymbol)}
-                        </div>
-                      </div>
-                      <div className="rounded-3xl border border-white/10 bg-white/5 px-4 py-3">
-                        <div className="text-[11px] uppercase tracking-[0.18em] text-white/46">Sample / Sims</div>
-                        <div className="mt-2 font-mono text-base text-white tabular-nums">
-                          {chartSummary.sampleSize}/{simulationData?.n_simulations ?? 0}
                         </div>
                       </div>
                     </div>

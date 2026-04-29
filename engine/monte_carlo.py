@@ -14,7 +14,7 @@ DEFAULT_SEED: Final[int] = 20_260_418
 
 LEGACY_DEFAULT_MONTHS: Final[int] = 6
 LEGACY_MAX_SIMULATIONS: Final[int] = 4_000
-SPAGHETTI_SAMPLE_LIMIT: Final[int] = 50
+SPAGHETTI_SAMPLE_LIMIT: Final[int] = 100
 
 
 class ParameterError(TypeError):
