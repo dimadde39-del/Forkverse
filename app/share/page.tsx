@@ -15,8 +15,14 @@ type SharePageProps = {
     runway?: string | string[];
     survival?: string | string[];
     verdict?: string | string[];
+    baselineRunway?: string | string[];
+    baselineSurvival?: string | string[];
   }>;
 };
+
+function formatMonths(value: number): string {
+  return Number.isInteger(value) ? String(value) : value.toFixed(1).replace(/\.0$/, "");
+}
 
 export async function generateMetadata({ searchParams }: SharePageProps): Promise<Metadata> {
   const shareCard = normalizeShareCardPayload(await searchParams);
@@ -58,6 +64,9 @@ export async function generateMetadata({ searchParams }: SharePageProps): Promis
 export default async function SharePage({ searchParams }: SharePageProps) {
   const shareCard = normalizeShareCardPayload(await searchParams);
   const ogImagePath = getOgImagePath(shareCard);
+  const hasDelta = shareCard.baselineRunway !== null && shareCard.baselineSurvival !== null;
+  const deltaRunwayMonths = hasDelta ? shareCard.runway - shareCard.baselineRunway! : 0;
+  const isImprovement = deltaRunwayMonths >= 0;
 
   return (
     <main className="min-h-screen bg-[#050608] px-6 py-16 text-white">
@@ -84,9 +93,26 @@ export default async function SharePage({ searchParams }: SharePageProps) {
         <div className="flex flex-col gap-4 rounded-[28px] border border-white/10 bg-white/5 p-5 sm:flex-row sm:items-center sm:justify-between sm:p-6">
           <div className="space-y-1">
             <p className="text-[11px] uppercase tracking-[0.3em] text-white/45">Runway</p>
-            <p className="text-3xl font-semibold tracking-[-0.05em] text-white sm:text-5xl">
-              {formatRunwayLabel(shareCard.runway)}
-            </p>
+            <div className="flex flex-wrap items-baseline gap-3">
+              <p className="text-3xl font-semibold tracking-[-0.05em] text-white sm:text-5xl">
+                {formatRunwayLabel(shareCard.runway)}
+              </p>
+              {hasDelta ? (
+                <span
+                  className={`rounded-full border px-3 py-1 font-mono text-sm font-bold ${
+                    isImprovement
+                      ? "border-emerald-300/40 bg-emerald-300/10 text-emerald-200"
+                      : "border-orange-300/40 bg-orange-300/10 text-orange-200"
+                  }`}
+                >
+                  {isImprovement ? "↑" : "↓"} {deltaRunwayMonths > 0 ? "+" : ""}
+                  {formatMonths(deltaRunwayMonths)}
+                </span>
+              ) : null}
+            </div>
+            {hasDelta ? (
+              <p className="text-sm text-white/42">Was {formatMonths(shareCard.baselineRunway!)} months</p>
+            ) : null}
           </div>
 
           <div className="h-px w-full bg-white/8 sm:h-14 sm:w-px" />
@@ -94,6 +120,12 @@ export default async function SharePage({ searchParams }: SharePageProps) {
           <div className="space-y-1">
             <p className="text-[11px] uppercase tracking-[0.3em] text-white/45">Survival 12m</p>
             <p className="text-3xl font-semibold tracking-[-0.05em] text-cyan-200 sm:text-5xl">
+              {hasDelta ? (
+                <>
+                  <span className="text-white/42">{formatSurvivalLabel(shareCard.baselineSurvival!)}</span>
+                  <span className="px-2 text-white/30">→</span>
+                </>
+              ) : null}
               {formatSurvivalLabel(shareCard.survival)}
             </p>
           </div>

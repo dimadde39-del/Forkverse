@@ -4,6 +4,8 @@ export type ShareCardPayload = {
   runway: number;
   survival: number;
   verdict: string;
+  baselineRunway: number | null;
+  baselineSurvival: number | null;
   capital: number;
   income: number;
   burn: number;
@@ -18,6 +20,8 @@ export type ShareCardQueryPayload = {
   runway: number;
   survival: number;
   verdict: string;
+  baselineRunway?: number | null;
+  baselineSurvival?: number | null;
   capital?: number;
   income?: number;
   burn?: number;
@@ -147,6 +151,8 @@ export function normalizeShareCardPayload(source: Record<string, SearchValue>): 
     runway,
     survival: parseMetric(source.survival, DEFAULT_SURVIVAL, 0, 100),
     verdict,
+    baselineRunway: parseOptionalMetric(source.baselineRunway, 0, 999),
+    baselineSurvival: parseOptionalMetric(source.baselineSurvival, 0, 100),
     capital,
     income,
     burn,
@@ -180,6 +186,8 @@ export function buildShareCardQuery(payload: ShareCardQueryPayload): URLSearchPa
   setMetric(params, "burn", payload.burn, 0, 1_000_000_000);
   setMetric(params, "survival", payload.survival, 0, 100);
   setMetric(params, "runway", payload.runway, 0, 999);
+  setMetric(params, "baselineRunway", payload.baselineRunway ?? undefined, 0, 999);
+  setMetric(params, "baselineSurvival", payload.baselineSurvival ?? undefined, 0, 100);
   params.set("verdict", clampText(payload.verdict, 140) || DEFAULT_VERDICT);
   setMetric(params, "income_delay_months", payload.incomeDelayMonths, 0, 240);
   setMetric(params, "capital_shock", payload.capitalShock, 0, 1_000_000_000);
@@ -211,5 +219,13 @@ export function formatSurvivalLabel(survival: number): string {
 }
 
 export function buildShareCardAlt(payload: ShareCardPayload): string {
+  if (payload.baselineRunway !== null && payload.baselineSurvival !== null) {
+    return `MonteRun verdict ${payload.verdict}. Runway ${formatRunwayLabel(
+      payload.baselineRunway,
+    )} to ${formatRunwayLabel(payload.runway)}. Survival 12m ${formatSurvivalLabel(
+      payload.baselineSurvival,
+    )} to ${formatSurvivalLabel(payload.survival)}.`;
+  }
+
   return `MonteRun verdict ${payload.verdict}. Runway ${formatRunwayLabel(payload.runway)}. Survival 12m ${formatSurvivalLabel(payload.survival)}.`;
 }

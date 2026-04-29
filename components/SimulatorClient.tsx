@@ -189,6 +189,12 @@ type ShareCardViewModel = {
   survivalValue: string;
   verdict: string;
   comment: string;
+  baselineRunwayValue: string | null;
+  baselineSurvivalValue: string | null;
+  deltaRunwayMonths: number | null;
+  deltaSurvivalPercent: number | null;
+  isImprovement: boolean | null;
+  hasDelta: boolean;
 };
 
 type ShareLinkModel = {
@@ -199,6 +205,16 @@ type ShareLinkModel = {
 type ResultMetricsViewModel = {
   runwayMonths: number;
   survivalPercent: number;
+};
+
+type ResultFlow = "parse" | "what-if";
+
+type BaselineResult = {
+  runwayMonths: number;
+  survivalPercent: number;
+  timestamp: string;
+  scenarioHash?: string;
+  horizonMonths?: number;
 };
 
 type DisplaySmartLever = SmartLever & {
@@ -219,6 +235,8 @@ const prefixMoneyFormatter = new Intl.NumberFormat("en-US", {
 });
 
 const PREFIX_CURRENCY_SYMBOLS = new Set(["$"]);
+const BASELINE_RESULT_STORAGE_KEY = "monterun_baseline_result";
+const LATEST_RESULT_STORAGE_KEY = "monterun_latest_result";
 
 const panelClass =
   "rounded-[28px] border border-white/10 bg-white/5 shadow-[0_24px_80px_rgba(0,0,0,0.24)] backdrop-blur-md";
@@ -331,6 +349,15 @@ function normalizeOptionalFiniteNumber(value: unknown): number | null {
   return isFiniteNumber(parsed) ? parsed : null;
 }
 
+function normalizeOptionalPositiveInt(value: unknown): number | undefined {
+  if (!isFiniteNumber(value)) {
+    return undefined;
+  }
+
+  const normalized = Math.round(value);
+  return normalized > 0 ? normalized : undefined;
+}
+
 function normalizeOptionalTextField(value: unknown): string | null {
   if (typeof value !== "string") {
     return null;
@@ -368,6 +395,54 @@ function normalizeOptionalLevers(value: unknown): SimulationLever[] | null {
   }
 
   return levers.length > 0 ? levers : null;
+}
+
+function normalizeStoredResult(value: unknown): BaselineResult | null {
+  if (!isRecord(value)) {
+    return null;
+  }
+
+  const runwayMonths = normalizeOptionalFiniteNumber(value.runwayMonths);
+  const survivalPercent = normalizeOptionalFiniteNumber(value.survivalPercent);
+  const timestamp = normalizeOptionalTextField(value.timestamp);
+
+  if (runwayMonths === null || survivalPercent === null || !timestamp) {
+    return null;
+  }
+
+  return {
+    runwayMonths,
+    survivalPercent: clampPct(normalizeProbabilityPercent(survivalPercent)),
+    timestamp,
+    scenarioHash: normalizeOptionalTextField(value.scenarioHash) ?? undefined,
+    horizonMonths: normalizeOptionalPositiveInt(value.horizonMonths),
+  };
+}
+
+function readStoredResult(storageKey: string): BaselineResult | null {
+  if (typeof window === "undefined") {
+    return null;
+  }
+
+  try {
+    const rawValue = window.localStorage.getItem(storageKey);
+    return rawValue ? normalizeStoredResult(JSON.parse(rawValue)) : null;
+  } catch (error) {
+    console.warn(`[SimClient] Unable to read ${storageKey}:`, error);
+    return null;
+  }
+}
+
+function writeStoredResult(storageKey: string, result: BaselineResult): void {
+  if (typeof window === "undefined") {
+    return;
+  }
+
+  try {
+    window.localStorage.setItem(storageKey, JSON.stringify(result));
+  } catch (error) {
+    console.warn(`[SimClient] Unable to write ${storageKey}:`, error);
+  }
 }
 
 function normalizeOptionalAssumptions(value: unknown): ParserAssumption[] | null {
@@ -836,6 +911,26 @@ function formatUrlPercent(value: number): string {
   return formatUrlNumber(Math.round(clampPct(normalized) * 10) / 10);
 }
 
+function getScenarioHash(params: SimulationParams | null): string | undefined {
+  return params
+    ? simulationParamKeys.map((key) => `${key}:${formatUrlNumber(params[key])}`).join("|")
+    : undefined;
+}
+
+function buildStoredResult(
+  resultMetrics: ResultMetricsViewModel,
+  simulationParams: SimulationParams | null,
+  generatedAt: string | null | undefined,
+): BaselineResult {
+  return {
+    runwayMonths: resultMetrics.runwayMonths,
+    survivalPercent: resultMetrics.survivalPercent,
+    timestamp: generatedAt ?? new Date().toISOString(),
+    scenarioHash: getScenarioHash(simulationParams),
+    horizonMonths: simulationParams?.months,
+  };
+}
+
 function getStressUrlState(params: SimulationParams, baselineParams: SimulationParams | null): StressUrlState {
   if (!baselineParams || areSimulationParamsEqual(params, baselineParams)) {
     return {
@@ -921,6 +1016,11 @@ function buildSimulationUrlSearchParams({
     searchParams.set("comment", shareCard.comment);
   } else if (simulationData.comment) {
     searchParams.set("comment", clampText(simulationData.comment, 140));
+  }
+
+  if (shareCard?.hasDelta && shareCard.baselineRunwayValue && shareCard.baselineSurvivalValue) {
+    searchParams.set("baselineRunway", shareCard.baselineRunwayValue);
+    searchParams.set("baselineSurvival", shareCard.baselineSurvivalValue);
   }
 
   const topLever = simulationData.levers?.[0];
@@ -1096,6 +1196,9 @@ export default function SimulatorClient() {
   const [whatIfParams, setWhatIfParams] = useState<SimulationParams | null>(null);
   const [whatIfBaselineParams, setWhatIfBaselineParams] = useState<SimulationParams | null>(null);
   const [hasTouchedWhatIf, setHasTouchedWhatIf] = useState(false);
+  const [baselineResult, setBaselineResult] = useState<BaselineResult | null>(null);
+  const [, setLatestResult] = useState<BaselineResult | null>(null);
+  const [resultFlow, setResultFlow] = useState<ResultFlow | null>(null);
   const [copyFeedback, setCopyFeedback] = useState<"idle" | "copied" | "error">("idle");
   const [appliedAssumptionIds, setAppliedAssumptionIds] = useState<Set<string>>(() => new Set());
   const [keptAssumptionIds, setKeptAssumptionIds] = useState<Set<string>>(() => new Set());
@@ -1113,6 +1216,12 @@ export default function SimulatorClient() {
   const currencySymbol = parseData?.status === "ready" ? parseData.currency_symbol : "$";
   const assumptionsUnderPressure =
     parseData?.assumptions && parseData.assumptions.length > 0 ? parseData.assumptions : null;
+
+  useEffect(() => {
+    setBaselineResult(readStoredResult(BASELINE_RESULT_STORAGE_KEY));
+    setLatestResult(readStoredResult(LATEST_RESULT_STORAGE_KEY));
+  }, []);
+
   const smartLevers = useMemo<SmartLever[] | null>(() => {
     const simulationLevers = simulationData?.levers
       ?.map((lever, index): SmartLever | null => {
@@ -1226,6 +1335,14 @@ export default function SimulatorClient() {
     };
   }, [simulationData]);
 
+  const currentStoredResult = useMemo<BaselineResult | null>(() => {
+    if (!resultMetrics) {
+      return null;
+    }
+
+    return buildStoredResult(resultMetrics, simulationParams, normalizeOptionalTextField(simulationMeta?.generated_at));
+  }, [resultMetrics, simulationMeta?.generated_at, simulationParams]);
+
   const chartSummary = useMemo(() => {
     if (!simulationData || !resultMetrics || chartData.length === 0) {
       return null;
@@ -1265,6 +1382,20 @@ export default function SimulatorClient() {
       return null;
     }
 
+    const baselineHorizon = baselineResult?.horizonMonths;
+    const currentHorizon = simulationParams?.months;
+    const hasComparableHorizon =
+      baselineHorizon === undefined || currentHorizon === undefined || baselineHorizon === currentHorizon;
+    const rawDeltaRunwayMonths = baselineResult ? resultMetrics.runwayMonths - baselineResult.runwayMonths : null;
+    const rawDeltaSurvivalPercent = baselineResult
+      ? resultMetrics.survivalPercent - baselineResult.survivalPercent
+      : null;
+    const hasChanged =
+      rawDeltaRunwayMonths !== null &&
+      rawDeltaSurvivalPercent !== null &&
+      (Math.abs(rawDeltaRunwayMonths) >= 0.05 || Math.abs(rawDeltaSurvivalPercent) >= 0.05);
+    const hasDelta = resultFlow === "what-if" && Boolean(baselineResult) && hasComparableHorizon && hasChanged;
+
     return {
       timestampIso,
       timestampLabel: timestampIso ? formatShareTimestamp(timestampIso) : null,
@@ -1272,8 +1403,25 @@ export default function SimulatorClient() {
       survivalValue: formatShareProbability(resultMetrics.survivalPercent),
       verdict: normalizedVerdict,
       comment: normalizedComment,
+      baselineRunwayValue: hasDelta && baselineResult ? formatRunwayMonths(baselineResult.runwayMonths) : null,
+      baselineSurvivalValue: hasDelta && baselineResult ? formatShareProbability(baselineResult.survivalPercent) : null,
+      deltaRunwayMonths: hasDelta ? rawDeltaRunwayMonths : null,
+      deltaSurvivalPercent: hasDelta ? rawDeltaSurvivalPercent : null,
+      isImprovement:
+        hasDelta && rawDeltaRunwayMonths !== null && rawDeltaSurvivalPercent !== null
+          ? rawDeltaRunwayMonths > 0 || (rawDeltaRunwayMonths === 0 && rawDeltaSurvivalPercent > 0)
+          : null,
+      hasDelta,
     };
-  }, [resultMetrics, simulationData?.comment, simulationData?.verdict, simulationMeta?.generated_at]);
+  }, [
+    baselineResult,
+    resultFlow,
+    resultMetrics,
+    simulationData?.comment,
+    simulationData?.verdict,
+    simulationMeta?.generated_at,
+    simulationParams?.months,
+  ]);
 
   const parsedParams = parseData?.status === "ready" ? parseData.params : null;
   const readyParams = whatIfParams ?? parsedParams;
@@ -1307,13 +1455,21 @@ export default function SimulatorClient() {
       burnMultiplier: simulationParams.burn_multiplier,
       months: simulationParams.months,
       nSimulations: simulationParams.n_simulations,
+      baselineRunway:
+        shareCard.hasDelta && shareCard.baselineRunwayValue !== null
+          ? Number.parseFloat(shareCard.baselineRunwayValue)
+          : undefined,
+      baselineSurvival:
+        shareCard.hasDelta && shareCard.baselineSurvivalValue !== null
+          ? Number.parseFloat(shareCard.baselineSurvivalValue)
+          : undefined,
     };
 
     return {
       ogImagePath: getOgImagePath(sharePayload),
       sharePagePath: getSharePagePath(sharePayload),
     };
-  }, [resultMetrics, shareCard?.verdict, simulationParams]);
+  }, [resultMetrics, shareCard, simulationParams]);
 
   const serializedSimulationUrlParams = useMemo(() => {
     if (!simulationParams || !simulationData || !resultMetrics) {
@@ -1329,6 +1485,23 @@ export default function SimulatorClient() {
       currencySymbol,
     }).toString();
   }, [currencySymbol, resultMetrics, shareCard, simulationData, simulationParams, whatIfBaselineParams]);
+
+  useEffect(() => {
+    if (!currentStoredResult || !resultFlow) {
+      return;
+    }
+
+    if (resultFlow === "parse") {
+      setBaselineResult(currentStoredResult);
+      setLatestResult(currentStoredResult);
+      writeStoredResult(BASELINE_RESULT_STORAGE_KEY, currentStoredResult);
+      writeStoredResult(LATEST_RESULT_STORAGE_KEY, currentStoredResult);
+      return;
+    }
+
+    setLatestResult(currentStoredResult);
+    writeStoredResult(LATEST_RESULT_STORAGE_KEY, currentStoredResult);
+  }, [currentStoredResult, resultFlow]);
 
   useEffect(() => {
     setCopyFeedback("idle");
@@ -1358,6 +1531,7 @@ export default function SimulatorClient() {
       setWhatIfParams(null);
       setWhatIfBaselineParams(null);
       setHasTouchedWhatIf(false);
+      setResultFlow(null);
       setAppliedAssumptionIds(new Set());
       setKeptAssumptionIds(new Set());
       setAppliedSmartLeverId(null);
@@ -1387,6 +1561,7 @@ export default function SimulatorClient() {
           : "Run simulation";
 
   const handleWhatIfSuccess = useCallback((result: SimulationResponseData, meta: ApiMeta, params: SimulationParams) => {
+    setResultFlow("what-if");
     setViewState((current) => {
       const previousSimulation = current.simulationData;
       const nextLevers =
@@ -1581,6 +1756,7 @@ export default function SimulatorClient() {
       setWhatIfParams(null);
       setWhatIfBaselineParams(null);
       setHasTouchedWhatIf(false);
+      setResultFlow(null);
     }
 
     setViewState((current) => ({
@@ -1619,6 +1795,7 @@ export default function SimulatorClient() {
       }
 
       const normalizedSimulationData = normalizeSimulationResponseData(parseEnvelope.data);
+      setResultFlow("parse");
       const parserReadyMessage = createMessage(
         "ai",
         `PARSER READY | CAPITAL ${normalizedParseData.params.initial_capital} | BURN ${normalizedParseData.params.monthly_burn} | INCOME ${normalizedParseData.params.monthly_income} | DELAY ${normalizedParseData.params.income_delay_months}M`,
@@ -2004,13 +2181,47 @@ export default function SimulatorClient() {
                             <div className="share-card__runway">
                               <div className="share-card__runway-value">{shareCard.runwayValue}</div>
                               <div className="share-card__runway-unit">MONTHS</div>
+                              {shareCard.hasDelta && shareCard.deltaRunwayMonths !== null ? (
+                                <div
+                                  className={`share-card__delta-pill ${
+                                    shareCard.isImprovement ? "share-card__delta-pill--up" : "share-card__delta-pill--down"
+                                  }`}
+                                >
+                                  <span aria-hidden="true">{shareCard.isImprovement ? "↑" : "↓"}</span>
+                                  <span>
+                                    {shareCard.deltaRunwayMonths > 0 ? "+" : ""}
+                                    {formatRunwayMonths(shareCard.deltaRunwayMonths)}
+                                  </span>
+                                </div>
+                              ) : null}
                             </div>
+                            {shareCard.hasDelta && shareCard.baselineRunwayValue ? (
+                              <p className="share-card__baseline-note">Was {shareCard.baselineRunwayValue} months</p>
+                            ) : null}
                             <p className="share-card__hero-note">{shareCard.comment}</p>
                           </div>
 
                           <div className="share-card__metric">
                             <div className="share-card__metric-row">
-                              <div className="share-card__metric-value">{shareCard.survivalValue}</div>
+                              <div
+                                className={
+                                  shareCard.hasDelta
+                                    ? "share-card__metric-value share-card__metric-value--delta"
+                                    : "share-card__metric-value"
+                                }
+                              >
+                                {shareCard.hasDelta && shareCard.baselineSurvivalValue ? (
+                                  <>
+                                    <span className="share-card__metric-baseline">
+                                      {shareCard.baselineSurvivalValue}
+                                    </span>
+                                    <span className="share-card__metric-arrow" aria-hidden="true">
+                                      →
+                                    </span>
+                                  </>
+                                ) : null}
+                                <span>{shareCard.survivalValue}</span>
+                              </div>
                               <div className="share-card__metric-label">Survival Probability 12m</div>
                             </div>
                           </div>
@@ -2397,6 +2608,40 @@ export default function SimulatorClient() {
             white-space: nowrap;
           }
 
+          .share-card__delta-pill {
+            transform: translateY(-0.5rem);
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            border-radius: 999px;
+            border: 1px solid currentColor;
+            padding: 8px 10px;
+            font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+            font-size: clamp(0.92rem, 1.8vw, 1.18rem);
+            font-weight: 800;
+            line-height: 1;
+            white-space: nowrap;
+          }
+
+          .share-card__delta-pill--up {
+            color: #00ffaa;
+            background: rgba(0, 255, 170, 0.08);
+            box-shadow: 0 0 24px rgba(0, 255, 170, 0.08);
+          }
+
+          .share-card__delta-pill--down {
+            color: #ff8b5f;
+            background: rgba(255, 139, 95, 0.08);
+            box-shadow: 0 0 24px rgba(255, 139, 95, 0.08);
+          }
+
+          .share-card__baseline-note {
+            margin: -4px 0 0;
+            color: rgba(226, 232, 240, 0.48);
+            font-size: 0.86rem;
+            line-height: 1.2;
+          }
+
           .share-card__hero-note {
             max-width: 28rem;
             margin: 0;
@@ -2448,6 +2693,24 @@ export default function SimulatorClient() {
             letter-spacing: -0.05em;
             color: var(--accent);
             text-shadow: 0 0 24px rgba(0, 255, 170, 0.1);
+          }
+
+          .share-card__metric-value--delta {
+            display: flex;
+            flex-wrap: wrap;
+            align-items: baseline;
+            gap: 8px;
+            font-size: clamp(1.8rem, 3.8vw, 2.9rem);
+            letter-spacing: -0.04em;
+          }
+
+          .share-card__metric-baseline,
+          .share-card__metric-arrow {
+            color: rgba(226, 232, 240, 0.5);
+          }
+
+          .share-card__metric-arrow {
+            font-size: 0.78em;
           }
 
           .share-card__metric-label {
