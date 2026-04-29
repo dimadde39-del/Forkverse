@@ -1,4 +1,10 @@
 {
+  "crons": [
+    {
+      "path": "/api/cron/drift",
+      "schedule": "0 3 * * *"
+    }
+  ],
   "functions": {
     "api/**/*.py": {
       "includeFiles": "prompts/**",

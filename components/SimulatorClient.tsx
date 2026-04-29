@@ -202,6 +202,11 @@ type ShareLinkModel = {
   sharePagePath: string;
 };
 
+type TelegramLinkModel = {
+  href: string;
+  startToken: string;
+};
+
 type ResultMetricsViewModel = {
   runwayMonths: number;
   survivalPercent: number;
@@ -237,6 +242,7 @@ const prefixMoneyFormatter = new Intl.NumberFormat("en-US", {
 const PREFIX_CURRENCY_SYMBOLS = new Set(["$"]);
 const BASELINE_RESULT_STORAGE_KEY = "monterun_baseline_result";
 const LATEST_RESULT_STORAGE_KEY = "monterun_latest_result";
+const telegramBotUsername = process.env.NEXT_PUBLIC_TELEGRAM_BOT_USERNAME;
 
 const panelClass =
   "rounded-[28px] border border-white/10 bg-white/5 shadow-[0_24px_80px_rgba(0,0,0,0.24)] backdrop-blur-md";
@@ -1032,6 +1038,16 @@ function buildSimulationUrlSearchParams({
   return searchParams;
 }
 
+function normalizeTelegramBotUsername(value: string | undefined): string | null {
+  const normalized = value?.trim().replace(/^@/, "");
+  return normalized && /^[a-zA-Z0-9_]{5,32}$/.test(normalized) ? normalized : null;
+}
+
+function buildTelegramStartToken(resultMetrics: ResultMetricsViewModel): string {
+  const runwayTenths = Math.max(0, Math.round(resultMetrics.runwayMonths * 10));
+  return `mr1_${runwayTenths.toString(36)}`;
+}
+
 function CustomTooltip({ active, payload, currencySymbol }: CustomTooltipProps) {
   if (!active || !payload || payload.length === 0) {
     return null;
@@ -1485,6 +1501,19 @@ export default function SimulatorClient() {
       currencySymbol,
     }).toString();
   }, [currencySymbol, resultMetrics, shareCard, simulationData, simulationParams, whatIfBaselineParams]);
+
+  const telegramLink = useMemo<TelegramLinkModel | null>(() => {
+    const username = normalizeTelegramBotUsername(telegramBotUsername);
+    if (!username || !resultMetrics) {
+      return null;
+    }
+
+    const startToken = buildTelegramStartToken(resultMetrics);
+    return {
+      href: `https://t.me/${username}?start=${encodeURIComponent(startToken)}`,
+      startToken,
+    };
+  }, [resultMetrics]);
 
   useEffect(() => {
     if (!currentStoredResult || !resultFlow) {
@@ -2241,6 +2270,17 @@ export default function SimulatorClient() {
                           >
                             [ Share Reality Check ]
                           </button>
+                          {telegramLink ? (
+                            <a
+                              aria-label={`Track survival in Telegram with token ${telegramLink.startToken}`}
+                              className="share-card__reality-button share-card__reality-button--telegram"
+                              href={telegramLink.href}
+                              rel="noreferrer"
+                              target="_blank"
+                            >
+                              Track survival in Telegram
+                            </a>
+                          ) : null}
                         </div>
 
                         {assumptionsUnderPressure ? (
@@ -2749,6 +2789,8 @@ export default function SimulatorClient() {
             display: flex;
             align-items: center;
             justify-content: flex-start;
+            flex-wrap: wrap;
+            gap: 10px;
             margin-top: -10px;
           }
 
@@ -2773,6 +2815,7 @@ export default function SimulatorClient() {
             letter-spacing: 0.16em;
             padding: 0 18px;
             text-transform: uppercase;
+            text-decoration: none;
             transition:
               border-color 140ms ease,
               background-color 140ms ease,
@@ -2793,6 +2836,25 @@ export default function SimulatorClient() {
             cursor: not-allowed;
             opacity: 0.52;
             transform: none;
+          }
+
+          .share-card__reality-button--telegram {
+            border-color: rgba(112, 246, 255, 0.28);
+            background:
+              linear-gradient(180deg, rgba(112, 246, 255, 0.14), rgba(112, 246, 255, 0.05)),
+              rgba(255, 255, 255, 0.02);
+            box-shadow:
+              inset 0 1px 0 rgba(255, 255, 255, 0.06),
+              0 18px 50px rgba(112, 246, 255, 0.08);
+            color: #70f6ff;
+          }
+
+          .share-card__reality-button--telegram:hover {
+            border-color: rgba(112, 246, 255, 0.48);
+            background:
+              linear-gradient(180deg, rgba(112, 246, 255, 0.2), rgba(112, 246, 255, 0.08)),
+              rgba(255, 255, 255, 0.03);
+            color: #e2fcff;
           }
 
           .share-card__footer {
