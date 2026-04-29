@@ -1584,10 +1584,20 @@ export default function SimulatorClient() {
     status === "clarifying"
       ? "Submit answer"
       : status === "parsing"
-        ? "Parsing"
+        ? "Reading plan"
         : status === "simulating"
           ? "Simulating"
           : "Run simulation";
+  const statusLabel =
+    status === "parsing"
+      ? "READING"
+      : status === "clarifying"
+        ? "CLARIFYING"
+        : status === "simulating"
+          ? "SIMULATING"
+          : status === "simulated"
+            ? "SIMULATED"
+            : "READY";
 
   const handleWhatIfSuccess = useCallback((result: SimulationResponseData, meta: ApiMeta, params: SimulationParams) => {
     setResultFlow("what-if");
@@ -1827,7 +1837,7 @@ export default function SimulatorClient() {
       setResultFlow("parse");
       const parserReadyMessage = createMessage(
         "ai",
-        `PARSER READY | CAPITAL ${normalizedParseData.params.initial_capital} | BURN ${normalizedParseData.params.monthly_burn} | INCOME ${normalizedParseData.params.monthly_income} | DELAY ${normalizedParseData.params.income_delay_months}M`,
+        `PLAN CAPTURED | CAPITAL ${normalizedParseData.params.initial_capital} | BURN ${normalizedParseData.params.monthly_burn} | INCOME ${normalizedParseData.params.monthly_income} | DELAY ${normalizedParseData.params.income_delay_months}M`,
       );
       const simulationCompleteMessage = createMessage(
         "ai",
@@ -1885,8 +1895,7 @@ export default function SimulatorClient() {
                 Cash runway intelligence with delayed-income modeling
               </h1>
               <p className="mt-3 max-w-2xl text-sm leading-6 text-white/62 sm:text-[15px]">
-                Free-form scenario input, strict JSON parsing, Monte Carlo with 50 background trajectories, and a softer
-                Linear/Stripe analytics surface shaped by the real emil-design-eng skill.
+                Stop guessing your runway. Get hard numbers, stress-test your reality, and find your escape route in 10 seconds.
               </p>
             </div>
 
@@ -1894,7 +1903,7 @@ export default function SimulatorClient() {
               <div className="rounded-3xl border border-white/10 bg-white/5 px-4 py-3 backdrop-blur-md">
                 <div className="text-[11px] uppercase tracking-[0.18em] text-white/46">State</div>
                 <div className="mt-2 font-mono text-sm text-white tabular-nums">
-                  {isWhatIfDirty ? "WHAT-IF" : status.toUpperCase()}
+                  {isWhatIfDirty ? "WHAT-IF" : statusLabel}
                 </div>
               </div>
               <div className="rounded-3xl border border-white/10 bg-white/5 px-4 py-3 backdrop-blur-md">
@@ -1957,7 +1966,7 @@ export default function SimulatorClient() {
                     {submitLabel}
                   </button>
                   <div className="text-[13px] text-white/48">
-                    Parser enforces strict JSON, then simulation starts immediately.
+                    Describe the plan. MonteRun turns it into survival math.
                   </div>
                 </div>
               </form>
