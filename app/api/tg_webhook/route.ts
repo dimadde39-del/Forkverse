@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 
 export const runtime = "nodejs";
 
+// Single production Telegram webhook owner for the launch drift-alert flow.
 const BOT_REPLY = "Plan fixed. I'll be back in 7 days to check how survival is going.";
 const TELEGRAM_API_BASE_URL = "https://api.telegram.org";
 

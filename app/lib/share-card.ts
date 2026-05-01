@@ -117,7 +117,10 @@ function setMetric(params: URLSearchParams, key: string, value: number | undefin
 }
 
 export function clampText(value: string, limit: number): string {
-  const normalized = value.trim().replace(/\s+/g, " ");
+  const normalized = value
+    .replace(/[\u0000-\u001f\u007f<>]/g, " ")
+    .trim()
+    .replace(/\s+/g, " ");
   if (!normalized) {
     return "";
   }

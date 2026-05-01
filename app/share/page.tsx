@@ -10,6 +10,8 @@ import {
   normalizeShareCardPayload,
 } from "@/app/lib/share-card";
 
+const FINANCIAL_GUARDRAIL = "Simulation estimate, not financial advice.";
+
 type SharePageProps = {
   searchParams: Promise<{
     runway?: string | string[];
@@ -80,6 +82,7 @@ export default async function SharePage({ searchParams }: SharePageProps) {
             <p className="max-w-2xl text-sm leading-7 text-white/62 sm:text-base">
               Deterministic survival snapshot rendered for social previews through the live Satori OG endpoint.
             </p>
+            <p className="text-xs text-white/42">{FINANCIAL_GUARDRAIL}</p>
           </div>
 
           <Link
@@ -105,7 +108,7 @@ export default async function SharePage({ searchParams }: SharePageProps) {
                       : "border-orange-300/40 bg-orange-300/10 text-orange-200"
                   }`}
                 >
-                  {isImprovement ? "↑" : "↓"} {deltaRunwayMonths > 0 ? "+" : ""}
+                  {isImprovement ? "up" : "down"} {deltaRunwayMonths > 0 ? "+" : ""}
                   {formatMonths(deltaRunwayMonths)}
                 </span>
               ) : null}
@@ -123,7 +126,7 @@ export default async function SharePage({ searchParams }: SharePageProps) {
               {hasDelta ? (
                 <>
                   <span className="text-white/42">{formatSurvivalLabel(shareCard.baselineSurvival!)}</span>
-                  <span className="px-2 text-white/30">→</span>
+                  <span className="px-2 text-white/30">{"->"}</span>
                 </>
               ) : null}
               {formatSurvivalLabel(shareCard.survival)}

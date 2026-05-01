@@ -13,6 +13,7 @@ FLEXIBLE_EXPENSES_NOISE_STD: Final[float] = 0.24
 DEFAULT_SEED: Final[int] = 20_260_418
 
 LEGACY_DEFAULT_MONTHS: Final[int] = 6
+LEGACY_MAX_MONTHS: Final[int] = 240
 LEGACY_MAX_SIMULATIONS: Final[int] = 4_000
 SPAGHETTI_SAMPLE_LIMIT: Final[int] = 100
 
@@ -272,7 +273,7 @@ def simulate(
     monthly_income_value = _as_float("monthly_income", monthly_income, minimum=0.0)
     capital_shock_value = _as_float("capital_shock", capital_shock, minimum=0.0)
     burn_multiplier_value = _as_float("burn_multiplier", burn_multiplier, minimum=0.0)
-    months_value = _as_int("months", months, minimum=1)
+    months_value = _as_int("months", months, minimum=1, maximum=LEGACY_MAX_MONTHS)
     n_simulations_value = _as_int(
         "n_simulations",
         n_simulations,

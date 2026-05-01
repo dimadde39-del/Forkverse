@@ -14,6 +14,7 @@ import numpy as np
 
 SCHEMA_VERSION: Final[str] = "2026-04"
 MAX_PAYLOAD_BYTES: Final[int] = 1_000_000
+MAX_SIMULATION_MONTHS: Final[int] = 240
 INCOME_DELAY_MONTHS_FIELD: Final[str] = "income_delay_months"
 CAPITAL_SHOCK_FIELD: Final[str] = "capital_shock"
 BURN_MULTIPLIER_FIELD: Final[str] = "burn_multiplier"
@@ -207,6 +208,52 @@ def _coerce_non_negative_float(name: str, value: Any, *, default: float = 0.0) -
     return coerced
 
 
+def _coerce_positive_int(name: str, value: Any, *, maximum: int | None = None) -> int:
+    if isinstance(value, bool):
+        raise ApiProblem(
+            "INVALID_PARAMS",
+            f"{name} must be a positive integer",
+            {"field": name, "reason": "boolean_not_allowed"},
+            False,
+        )
+
+    try:
+        coerced = int(value)
+    except (TypeError, ValueError) as exc:
+        raise ApiProblem(
+            "INVALID_PARAMS",
+            f"{name} must be a positive integer",
+            {"field": name, "reason": "non_integer_value"},
+            False,
+        ) from exc
+
+    if coerced != value and not (isinstance(value, str) and value.strip() == str(coerced)):
+        raise ApiProblem(
+            "INVALID_PARAMS",
+            f"{name} must be a positive integer",
+            {"field": name, "reason": "non_integer_value"},
+            False,
+        )
+
+    if coerced < 1:
+        raise ApiProblem(
+            "INVALID_PARAMS",
+            f"{name} must be a positive integer",
+            {"field": name, "reason": "below_minimum", "minimum": 1},
+            False,
+        )
+
+    if maximum is not None and coerced > maximum:
+        raise ApiProblem(
+            "INVALID_PARAMS",
+            f"{name} must be <= {maximum}",
+            {"field": name, "reason": "above_maximum", "maximum": maximum},
+            False,
+        )
+
+    return coerced
+
+
 class handler(BaseHTTPRequestHandler):
     server_version = "MonteRun"
     sys_version = ""
@@ -389,6 +436,12 @@ class handler(BaseHTTPRequestHandler):
             normalized_params.get(BURN_MULTIPLIER_FIELD),
             default=1.0,
         )
+        if "months" in normalized_params:
+            normalized_params["months"] = _coerce_positive_int(
+                "months",
+                normalized_params.get("months"),
+                maximum=MAX_SIMULATION_MONTHS,
+            )
 
         return normalized_params
 

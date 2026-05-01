@@ -9,6 +9,8 @@ const FALLBACKS = {
   survival: 0,
   runway: 0,
 };
+const OG_VERDICT_MAX_CHARS = 72;
+const FINANCIAL_GUARDRAIL = "Simulation estimate, not financial advice.";
 
 function readFiniteNumber(value: string | null, fallback: number) {
   if (!value) {
@@ -109,6 +111,19 @@ function truncate(value: string, limit: number) {
   return `${value.slice(0, limit - 1).trimEnd()}...`;
 }
 
+function sanitizeText(value: string | null, fallback: string, limit: number) {
+  if (!value) {
+    return fallback;
+  }
+
+  const normalized = value
+    .replace(/[\u0000-\u001f\u007f<>]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+
+  return normalized ? truncate(normalized, limit) : fallback;
+}
+
 export async function GET(request: Request) {
   const { searchParams } = new URL(request.url);
   const capital = readMoney(searchParams.get("capital"), FALLBACKS.capital);
@@ -123,11 +138,13 @@ export async function GET(request: Request) {
   const deltaRunwayMonths = hasDelta ? runwayMonths - baselineRunway : 0;
   const isImprovement = deltaRunwayMonths >= 0;
   const accentColor = hasDelta ? (isImprovement ? "#70f6ff" : "#ff8b5f") : "#70f6ff";
-  const verdict = truncate(
-    hasDelta
-      ? getDeltaVerdict(baselineSurvival, deltaRunwayMonths)
-      : `My startup dies in ${runwayLabel} months. Beat that.`,
-    72,
+  const fallbackVerdict = hasDelta
+    ? getDeltaVerdict(baselineSurvival, deltaRunwayMonths)
+    : `My startup dies in ${runwayLabel} months. Beat that.`;
+  const verdict = sanitizeText(
+    searchParams.get("verdict"),
+    fallbackVerdict,
+    OG_VERDICT_MAX_CHARS,
   );
 
   return new ImageResponse(
@@ -240,7 +257,7 @@ export async function GET(request: Request) {
                       letterSpacing: "0",
                     }}
                   >
-                    →
+                    {"->"}
                   </span>
                   <span style={{ display: "flex" }}>{survival}%</span>
                 </div>
@@ -326,6 +343,16 @@ export async function GET(request: Request) {
               }}
             >
               Math decides
+            </div>
+            <div
+              style={{
+                display: "flex",
+                color: "rgba(244, 248, 251, 0.46)",
+                fontSize: 17,
+                letterSpacing: "0.02em",
+              }}
+            >
+              {FINANCIAL_GUARDRAIL}
             </div>
           </div>
         </div>

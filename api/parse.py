@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hmac
 import importlib
 import json
 import logging
@@ -23,6 +24,9 @@ import numpy as np
 
 SCHEMA_VERSION: Final[str] = "2026-04"
 MAX_PAYLOAD_BYTES: Final[int] = 1_000_000
+MAX_PARSE_TEXT_CHARS: Final[int] = 6_000
+PARSE_GATE_TOKEN_ENV: Final[str] = "MONTERUN_PARSE_GATE_TOKEN"
+PARSE_GATE_HEADER: Final[str] = "X-MonteRun-Tester"
 REQUEST_TIMEOUT_SECONDS: Final[float] = 20.0
 PROJECT_ROOT: Final[Path] = Path(__file__).parent.parent.resolve()
 ENV_PATH: Final[Path] = PROJECT_ROOT / ".env"
@@ -284,6 +288,64 @@ def _build_error(
         "details": details,
         "retryable": retryable,
     }
+
+
+def _read_header(headers: Any, name: str) -> str | None:
+    if not hasattr(headers, "get"):
+        return None
+
+    value = headers.get(name)
+    if value is None:
+        value = headers.get(name.lower())
+
+    return value.strip() if isinstance(value, str) and value.strip() else None
+
+
+def _enforce_soft_launch_gate(headers: Any) -> None:
+    expected_token = os.getenv(PARSE_GATE_TOKEN_ENV, "").strip()
+    if not expected_token:
+        return
+
+    supplied_token = _read_header(headers, PARSE_GATE_HEADER)
+    authorization = _read_header(headers, "Authorization")
+    if supplied_token is None and authorization:
+        prefix = "Bearer "
+        if authorization.startswith(prefix):
+            supplied_token = authorization[len(prefix) :].strip()
+
+    if supplied_token and hmac.compare_digest(supplied_token, expected_token):
+        return
+
+    raise ApiProblem(
+        "RATE_LIMITED",
+        "Soft-launch tester access is required",
+        {"header": PARSE_GATE_HEADER},
+        False,
+        403,
+    )
+
+
+def _validate_parse_text(text: str) -> str:
+    normalized = text.strip()
+    if not normalized:
+        raise ApiProblem(
+            "INVALID_PARAMS",
+            "text is required",
+            {"field": "text"},
+            False,
+            400,
+        )
+
+    if len(normalized) > MAX_PARSE_TEXT_CHARS:
+        raise ApiProblem(
+            "INVALID_PARAMS",
+            "text is too long",
+            {"field": "text", "max_chars": MAX_PARSE_TEXT_CHARS},
+            False,
+            413,
+        )
+
+    return normalized
 
 
 def _clean_text(value: str) -> str:
@@ -2204,6 +2266,7 @@ class handler(BaseHTTPRequestHandler):
         status_code = 200
 
         try:
+            _enforce_soft_launch_gate(self.headers)
             body = self._read_json_body()
             user_text = self._extract_text(body)
             telegram_user_id = self._extract_optional_telegram_user_id(body)
@@ -2403,7 +2466,7 @@ class handler(BaseHTTPRequestHandler):
 
     def _extract_text(self, body: dict[str, Any]) -> str:
         text = body.get("text")
-        if not isinstance(text, str) or not text.strip():
+        if not isinstance(text, str):
             raise ApiProblem(
                 "INVALID_PARAMS",
                 "text is required",
@@ -2412,7 +2475,7 @@ class handler(BaseHTTPRequestHandler):
                 400,
             )
 
-        return text.strip()
+        return _validate_parse_text(text)
 
     def _extract_optional_telegram_user_id(self, body: dict[str, Any]) -> int | None:
         if "telegram_user_id" not in body or body["telegram_user_id"] is None:

@@ -242,6 +242,7 @@ const prefixMoneyFormatter = new Intl.NumberFormat("en-US", {
 const PREFIX_CURRENCY_SYMBOLS = new Set(["$"]);
 const BASELINE_RESULT_STORAGE_KEY = "monterun_baseline_result";
 const LATEST_RESULT_STORAGE_KEY = "monterun_latest_result";
+const FINANCIAL_GUARDRAIL = "Simulation estimate, not financial advice.";
 const telegramBotUsername = process.env.NEXT_PUBLIC_TELEGRAM_BOT_USERNAME;
 
 const panelClass =
@@ -1761,14 +1762,13 @@ export default function SimulatorClient() {
   }, [parseData, whatIfBaselineParams]);
 
   async function handleCopyShareLink() {
-    if (!serializedSimulationUrlParams || typeof window === "undefined" || !navigator.clipboard) {
+    if (!shareLinks || typeof window === "undefined" || !navigator.clipboard) {
       setCopyFeedback("error");
       return;
     }
 
     try {
-      const absoluteShareUrl = new URL(window.location.href);
-      absoluteShareUrl.search = serializedSimulationUrlParams;
+      const absoluteShareUrl = new URL(shareLinks.sharePagePath, window.location.origin);
       await navigator.clipboard.writeText(absoluteShareUrl.toString());
       setCopyFeedback("copied");
     } catch (error) {
@@ -2230,7 +2230,7 @@ export default function SimulatorClient() {
                                     shareCard.isImprovement ? "share-card__delta-pill--up" : "share-card__delta-pill--down"
                                   }`}
                                 >
-                                  <span aria-hidden="true">{shareCard.isImprovement ? "↑" : "↓"}</span>
+                                  <span aria-hidden="true">{shareCard.isImprovement ? "up" : "down"}</span>
                                   <span>
                                     {shareCard.deltaRunwayMonths > 0 ? "+" : ""}
                                     {formatRunwayMonths(shareCard.deltaRunwayMonths)}
@@ -2259,7 +2259,7 @@ export default function SimulatorClient() {
                                       {shareCard.baselineSurvivalValue}
                                     </span>
                                     <span className="share-card__metric-arrow" aria-hidden="true">
-                                      →
+                                      {"->"}
                                     </span>
                                   </>
                                 ) : null}
@@ -2278,7 +2278,7 @@ export default function SimulatorClient() {
                         <div className="share-card__reality-check">
                           <button
                             className="share-card__reality-button"
-                            disabled={!serializedSimulationUrlParams}
+                            disabled={!shareLinks}
                             onClick={handleCopyShareLink}
                             type="button"
                           >
@@ -2469,6 +2469,7 @@ export default function SimulatorClient() {
 
                         <footer className="share-card__footer">
                           <span>monterun.io</span>
+                          <span>{FINANCIAL_GUARDRAIL}</span>
                           <strong>Math decides.</strong>
                         </footer>
                       </article>
