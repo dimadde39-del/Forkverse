@@ -3,6 +3,8 @@
 Source: `C:\ForkVerse\ForkVerse_MasterPlan.docx`
 Imported: 2026-04-18
 
+Legacy note updated 2026-05-01: this is an origin document, not current architecture. Current product name is MonteRun. Current provider is DeepSeek extraction/phrasing, the parser is JSON-only with no reasoning output, math is deterministic code, Delta Share Card is shipped, and Telegram Drift Alerts are shipped through Supabase `user_alerts` plus `/api/cron/drift`. Do not use this document to justify ForkVerse naming, Gemini-era provider assumptions, daily interrogation bots, or any multi-agent backend chain.
+
 FORKVERSE
 
 forkverse.io

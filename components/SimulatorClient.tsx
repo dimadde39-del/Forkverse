@@ -223,7 +223,7 @@ type BaselineResult = {
 };
 
 type DisplaySmartLever = SmartLever & {
-  displayImpactMonths: number | null;
+  impactLabel: string;
 };
 
 type StressUrlState = {
@@ -849,6 +849,26 @@ function formatImpactMonths(value: number): string {
   return `${sign}${value.toFixed(precision)} MONTHS`;
 }
 
+function formatSmartLeverImpactLabel(lever: SmartLever, currentParams: SimulationParams | null): string {
+  if (lever.impact_months !== null) {
+    return lever.impact_months > 0 ? formatImpactMonths(lever.impact_months) : "No runway gain";
+  }
+
+  if (!currentParams) {
+    return "Impact pending";
+  }
+
+  const baseRunwayMonths = estimateRunwayMonths(currentParams);
+  const patchedRunwayMonths = estimateRunwayMonths(applySmartLeverMathPatch(currentParams, lever.math_patch));
+  const impactMonths = patchedRunwayMonths - baseRunwayMonths;
+
+  if (impactMonths > 0) {
+    return formatImpactMonths(impactMonths);
+  }
+
+  return impactMonths < 0 ? formatImpactMonths(impactMonths) : "No runway gain";
+}
+
 function formatShareProbability(value: number): string {
   const clamped = clampPct(value);
   const precision = Number.isInteger(clamped) ? 0 : 1;
@@ -873,22 +893,6 @@ function estimateRunwayMonths(params: SimulationParams): number {
   }
 
   return params.months;
-}
-
-function getDisplayImpactMonths(lever: SmartLever, currentParams: SimulationParams | null): number | null {
-  if (lever.impact_months !== null && lever.impact_months > 0) {
-    return lever.impact_months;
-  }
-
-  if (!currentParams) {
-    return null;
-  }
-
-  const baseRunwayMonths = estimateRunwayMonths(currentParams);
-  const patchedRunwayMonths = estimateRunwayMonths(applySmartLeverMathPatch(currentParams, lever.math_patch));
-  const impactMonths = patchedRunwayMonths - baseRunwayMonths;
-
-  return impactMonths > 0 ? impactMonths : null;
 }
 
 function formatShareTimestamp(iso: string): string {
@@ -1451,7 +1455,7 @@ export default function SimulatorClient() {
 
     return smartLevers.map((lever) => ({
       ...lever,
-      displayImpactMonths: getDisplayImpactMonths(lever, simulationParams ?? readyParams),
+      impactLabel: formatSmartLeverImpactLabel(lever, simulationParams ?? readyParams),
     }));
   }, [readyParams, simulationParams, smartLevers]);
 
@@ -2080,7 +2084,7 @@ export default function SimulatorClient() {
                       </div>
                     </div>
 
-                    <div className="relative h-[320px] overflow-hidden rounded-[28px] border border-white/10 bg-[radial-gradient(circle_at_top_left,rgba(16,185,129,0.10),transparent_32%),linear-gradient(180deg,rgba(255,255,255,0.04),rgba(255,255,255,0.01))] p-2 sm:h-[360px] lg:h-[420px]">
+                    <div className="relative h-[320px] min-h-[320px] min-w-0 overflow-hidden rounded-[28px] border border-white/10 bg-[radial-gradient(circle_at_top_left,rgba(16,185,129,0.10),transparent_32%),linear-gradient(180deg,rgba(255,255,255,0.04),rgba(255,255,255,0.01))] p-2 sm:h-[360px] sm:min-h-[360px] lg:h-[420px] lg:min-h-[420px]">
                       {whatIfSimulation.isPending ? (
                         <div
                           aria-live="polite"
@@ -2092,7 +2096,13 @@ export default function SimulatorClient() {
                           </div>
                         </div>
                       ) : null}
-                      <ResponsiveContainer width="100%" height="100%">
+                      <ResponsiveContainer
+                        width="100%"
+                        height="100%"
+                        minWidth={240}
+                        minHeight={304}
+                        initialDimension={{ width: 720, height: 304 }}
+                      >
                         <ComposedChart data={chartData} margin={{ top: 12, right: 18, bottom: 8, left: 4 }}>
                           <defs>
                             <linearGradient id="chartBand" x1="0" x2="0" y1="0" y2="1">
@@ -2409,16 +2419,13 @@ export default function SimulatorClient() {
                                       </span>
                                     </span>
                                     <span className="grid gap-2">
-                                      <span className="text-base font-medium leading-6 text-white">{lever.title}</span>
-                                      <span className="font-mono text-[12px] leading-5 text-emerald-100/82">
+                                      <span className="font-mono text-[12px] leading-5 text-emerald-100/90">
                                         {patchEffect}
                                       </span>
                                     </span>
                                     <span className="mt-auto flex items-center justify-between gap-3 border-t border-white/10 pt-3">
                                       <span className="font-mono text-[11px] uppercase tracking-[0.14em] text-white/46">
-                                        {lever.displayImpactMonths !== null
-                                          ? formatImpactMonths(lever.displayImpactMonths)
-                                          : "Impact recalculated"}
+                                        {lever.impactLabel}
                                       </span>
                                       <span className="font-mono text-[11px] uppercase tracking-[0.14em] text-emerald-200">
                                         {isApplied ? "Applied" : "Apply"}

@@ -1,3 +1,9 @@
+# 2026-05-01
+
+- Docs synced to the launch-hardening reality: parser extraction is JSON-only with no LLM reasoning output, a sub-10-second target, and deterministic code ownership for all math.
+- Delta Share Card documented as shipped: browser baseline/latest state, URL-param share payloads, `/share`, and dynamic `/api/og`.
+- Telegram Drift Alerts documented as shipped: Supabase `user_alerts`, protected `/api/cron/drift`, and Telegram `sendMessage`.
+
 # 2026-04-09
 
 - Реализовано базовое математическое ядро Monte Carlo для `Fork Zero` на `numpy` с полной векторизацией по симуляциям и генератором `np.random.default_rng()`.

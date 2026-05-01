@@ -3,6 +3,8 @@
 Source: `C:\ForkVerse\MonteRun_PRD.docx`
 Imported: 2026-04-18
 
+Current launch-hardening status: updated 2026-05-01. This PRD remains the product frame, but current implementation notes below override older speculative MVP wording.
+
 MonteRun
 
 Product Requirements Document
@@ -38,6 +40,8 @@ MonteRun строится вокруг трёх принципов: Math decides
 Покажи, сколько ты реально протянешь, если убрать самообман и смоделировать плохие месяцы.
 
 Продуктовая дисциплина: никаких инвестиционных советов, никакой магии LLM в расчётах, никакого фокуса на виральности в ущерб retention.
+
+Launch-hardening invariant: the parser is optimized for fast extraction with a sub-10-second target. It returns raw JSON only, without reasoning output. The LLM may parse and phrase; it never computes runway, probability, stress outcomes, or lever impact.
 
 2. Users and Jobs-to-be-Done
 
@@ -203,7 +207,7 @@ FR-07
 
 Share Card
 
-Система генерирует лаконичную share-card с ключевой цифрой, контекстом и verdict line.
+Система генерирует Delta Share Card с ключевой цифрой, verdict line, baseline/latest delta state, share URL params, share page and OG image.
 
 P1
 
@@ -267,9 +271,11 @@ Yes
 
 • Scenario Engine: generates baseline and stress outputs plus lever ranking.
 
-• Tone Layer: LLM receives only structured results and converts them into selected verdict style.
+• Parser / Tone Layer: LLM extracts structured inputs and may phrase short verdict/comment text. It must not emit reasoning output and must not own math.
 
-• Presentation Layer: fast web UI and share-card renderer.
+• Presentation Layer: fast web UI, Delta Share Card renderer, `/share` page, and dynamic `/api/og` image.
+
+• Retention Layer: Telegram `/start` can register a lightweight drift alert in Supabase `user_alerts`; protected cron route `/api/cron/drift` sends the 7-day check-in through Telegram `sendMessage`.
 
 7.2 Tone Modes
 
@@ -367,9 +373,9 @@ First useful result feels premium and instant.
 
 Share & Launch
 
-Share-card generator, landing page, analytics, launch copy.
+Delta Share Card, share page, OG image, Telegram drift alerts, landing page, analytics, launch copy.
 
-Product is shareable without looking like a meme.
+Product is shareable without looking like a meme and can remind tracked Telegram users after the 7-day drift window.
 
 10. Risks and Guardrails
 
@@ -388,3 +394,5 @@ Product is shareable without looking like a meme.
 MonteRun MVP is a runway and survival simulator for people who want numbers instead of copium. The MVP succeeds if users do not just read a verdict, but interact with levers, test stress scenarios, and return whenever reality changes.
 
 Internal rule: retention beats virality, math beats tone, and scenario clarity beats feature breadth.
+
+Current launch rule: keep the shipped path simple. No multi-agent backend chain, no reasoning-heavy parser output, and no new speculative features until parser latency, share reliability, and drift-alert delivery are stable.

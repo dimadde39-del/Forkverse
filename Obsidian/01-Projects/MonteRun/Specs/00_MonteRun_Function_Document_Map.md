@@ -3,6 +3,8 @@
 Source: `C:\ForkVerse\00_MonteRun_Function_Document_Map.docx`
 Imported: 2026-04-18
 
+Current launch-hardening status: updated 2026-05-01. The canonical trio plus current notes in this Specs folder override older imported `.docx` wording when there is a conflict.
+
 MonteRun
 
 Карта документов и индекс функций
@@ -51,15 +53,15 @@ Tone modes, output rules, white-label safety, praise discipline.
 
 06. Scenario Recalculation & History
 
-Сохранение сценариев, delta view, повторный расчёт и возвращаемость.
+Сохранение сценариев, delta view, повторный расчёт и возвращаемость. Current launch subset: browser baseline/latest state for what-if and sharing.
 
 07. Share Card Generator
 
-Карточки для шерина, структура данных, визуальные правила и экспорт.
+Карточки для шерина, структура данных, визуальные правила и экспорт. Current: Delta Share Card with localStorage, URL params, `/share`, and `/api/og`.
 
 08. Telegram Bot Layer
 
-Диалоги, быстрые пересчёты, micro-prompts, deep link flow.
+Диалоги, быстрые пересчёты, micro-prompts, deep link flow. Current: Telegram Drift Alerts via Supabase `user_alerts`, protected cron, and Telegram `sendMessage`.
 
 09. Landing Page & Acquisition
 
@@ -75,7 +77,7 @@ Tone modes, output rules, white-label safety, praise discipline.
 
 3. Правило приоритета
 
-Если документы конфликтуют между собой, приоритет такой: PRD -> детерминированная математика -> feature spec -> copy/tone guidance. Текст никогда не должен ломать математику.
+Если документы конфликтуют между собой, приоритет такой: canonical trio -> current implementation notes -> PRD -> детерминированная математика -> feature spec -> copy/tone guidance. Текст никогда не должен ломать математику.
 
 4. Рекомендуемый порядок разработки
 

@@ -3,6 +3,8 @@
 Source: `C:\ForkVerse\06_MonteRun_Scenario_Recalculation_And_History_Spec.docx`
 Imported: 2026-04-18
 
+Current launch-hardening status: updated 2026-05-01.
+
 MonteRun
 
 Спецификация функции: Scenario Recalculation & History
@@ -55,9 +57,15 @@ Scenario labels
 
 Позволяет отмечать сценарии как Base, Plan B, Worst Month и т.д.
 
+Current shipped subset
+
+The launch build stores baseline/latest result state locally in the browser and uses that state for Delta Share Card comparison. This is not yet a full multi-scenario history product; it is a focused before/after loop for what-if changes and sharing.
+
 4. Delta view
 
 Показывать не только новое значение, но и изменение относительно прошлого: last week runway, current runway, delta in months, main reason of change.
+
+Current launch behavior: the share card compares the current what-if/latest result against the stored baseline result when horizons are comparable. It displays prior runway/survival, current runway/survival, and the runway delta. Share URLs carry both latest and baseline metrics through URL params.
 
 5. Метрики успеха
 
@@ -74,3 +82,5 @@ Scenario labels
 • Без мульти-аккаунтного shared workspace.
 
 • Без совместного редактирования.
+
+• Без серверной multi-agent history chain; current baseline/latest state is local and share-oriented.

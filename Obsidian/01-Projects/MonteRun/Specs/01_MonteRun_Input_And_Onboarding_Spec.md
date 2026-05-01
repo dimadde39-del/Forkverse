@@ -3,6 +3,8 @@
 Source: `C:\ForkVerse\01_MonteRun_Input_And_Onboarding_Spec.docx`
 Imported: 2026-04-18
 
+Current launch-hardening status: updated 2026-05-01.
+
 MonteRun
 
 Спецификация функции: Input & Onboarding
@@ -22,6 +24,8 @@ Draft v1.0
 1. Цель функции
 
 Собрать минимально достаточные финансовые данные так, чтобы пользователь получил первый сильный verdict менее чем за 60 секунд, без обучения и без ощущения, что он заполняет бухгалтерскую форму.
+
+Launch reality: the parser path is now hardened for fast extraction with a sub-10-second target. It must return compact raw JSON only, without chain-of-thought, markdown, analysis, or explanatory prose. The LLM parses facts and short phrasing only; deterministic code owns all math.
 
 2. Пользовательская ценность
 
@@ -96,6 +100,8 @@ Unstable income toggle
 6. Интерфейс первого результата
 
 После отправки формы пользователь должен попасть сразу на главный экран с runway, base vs stress, levers и verdict. Никаких промежуточных “почти готово” экранов, если расчёт укладывается в SLA.
+
+Current launch SLA: the first parse/extraction should feel immediate enough for launch smoke tests. Any response that exposes LLM reasoning, formulas, or prose outside JSON is a parser bug, not acceptable product behavior.
 
 7. Не делаем в MVP
 
