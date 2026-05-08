@@ -1,0 +1,4 @@
+interface:
+  display_name: "MonteRun Wiki"
+  short_description: "Maintain the MonteRun LLM Wiki in Obsidian."
+  default_prompt: "Use the MonteRun LLM Wiki workflow to ingest sources, answer from compiled project memory, lint stale claims, and update index/log files."
