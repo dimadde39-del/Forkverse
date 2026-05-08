@@ -704,6 +704,10 @@ function formatAxisCurrency(value: number, currencySymbol: string): string {
     : `${sign}${compactValue} ${currencySymbol}`;
 }
 
+function formatMobileAxisCurrency(value: number, currencySymbol: string): string {
+  return formatAxisCurrency(value, currencySymbol).replace(/\s+/g, "");
+}
+
 function formatDelayMonths(value: number): string {
   return value > 0 ? `+${value}m` : "Live";
 }
@@ -1408,6 +1412,52 @@ export default function SimulatorClient() {
     [chartSummary?.sampleSize],
   );
 
+  const mobileChartData = useMemo<MonteCarloChartPoint[]>(() => {
+    if (chartData.length === 0) {
+      return [];
+    }
+
+    const firstOptimisticDepletedIndex = chartData.findIndex((point) => point.p90 <= 0);
+    const firstMedianDepletedIndex = chartData.findIndex((point) => point.p50 <= 0);
+    const depletionIndex =
+      firstOptimisticDepletedIndex >= 0 ? firstOptimisticDepletedIndex : firstMedianDepletedIndex;
+
+    if (depletionIndex < 0) {
+      return chartData;
+    }
+
+    const visibleMonthCount = Math.min(chartData.length, Math.max(6, depletionIndex + 4));
+    return chartData.slice(0, visibleMonthCount);
+  }, [chartData]);
+
+  const mobileRawSeriesKeys = useMemo(
+    () => rawSeriesKeys.filter((_, index) => index % 4 === 0).slice(0, 14),
+    [rawSeriesKeys],
+  );
+
+  const mobileXAxisTicks = useMemo(() => {
+    if (mobileChartData.length === 0) {
+      return [];
+    }
+
+    const lastMonth = mobileChartData[mobileChartData.length - 1].month;
+    const middleMonth = Math.max(1, Math.round(lastMonth / 2));
+    const candidates = [1, middleMonth, lastMonth];
+
+    return candidates.filter(
+      (month, index) => candidates.indexOf(month) === index && mobileChartData.some((point) => point.month === month),
+    );
+  }, [mobileChartData]);
+
+  const mobileFocusLabel = useMemo(() => {
+    if (mobileChartData.length === 0 || !chartSummary) {
+      return null;
+    }
+
+    const lastMonth = mobileChartData[mobileChartData.length - 1].month;
+    return lastMonth >= chartSummary.horizon ? `${chartSummary.horizon} months` : `M1-M${lastMonth} focus`;
+  }, [chartSummary, mobileChartData]);
+
   const shareCard = useMemo<ShareCardViewModel | null>(() => {
     const verdict = simulationData?.verdict;
     const comment = simulationData?.comment;
@@ -2081,20 +2131,20 @@ export default function SimulatorClient() {
                   </div>
 
                   {chartSummary ? (
-                    <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+                    <div className="grid grid-cols-1 gap-3 md:grid-cols-3">
                       <div className="rounded-3xl border border-white/10 bg-white/5 px-4 py-3">
                         <div className="text-[11px] uppercase tracking-[0.18em] text-white/46">Survival</div>
                         <div className="mt-2 font-mono text-base text-white tabular-nums">
                           {chartSummary.survivalPct.toFixed(1)}%
                         </div>
                       </div>
-                      <div className="hidden rounded-3xl border border-white/10 bg-white/5 px-4 py-3 sm:block">
+                      <div className="hidden rounded-3xl border border-white/10 bg-white/5 px-4 py-3 md:block">
                         <div className="text-[11px] uppercase tracking-[0.18em] text-white/46">Bankruptcy</div>
                         <div className="mt-2 font-mono text-base text-white tabular-nums">
                           {chartSummary.bankruptcyPct.toFixed(1)}%
                         </div>
                       </div>
-                      <div className="hidden rounded-3xl border border-white/10 bg-white/5 px-4 py-3 sm:block">
+                      <div className="hidden rounded-3xl border border-white/10 bg-white/5 px-4 py-3 md:block">
                         <div className="text-[11px] uppercase tracking-[0.18em] text-white/46">Median End</div>
                         <div className="mt-2 font-mono text-base text-white tabular-nums">
                           {formatCurrency(chartSummary.medianEndingBalance, currencySymbol)}
@@ -2106,28 +2156,33 @@ export default function SimulatorClient() {
               </div>
 
               {chartSummary && chartData.length > 0 ? (
-                <div className="px-3 py-3 sm:px-6 sm:py-6">
-                  <div className="rounded-[30px] border border-white/10 bg-[linear-gradient(180deg,rgba(255,255,255,0.05),rgba(255,255,255,0.02))] p-3 shadow-[inset_0_1px_0_rgba(255,255,255,0.05)] sm:p-4">
-                    <div className="mb-4 flex flex-wrap items-start justify-between gap-3">
+                <div className="px-3 py-3 sm:px-5 sm:py-5 lg:px-6 lg:py-6">
+                  <div className="rounded-[24px] border border-white/10 bg-[linear-gradient(180deg,rgba(255,255,255,0.05),rgba(255,255,255,0.02))] p-3 shadow-[inset_0_1px_0_rgba(255,255,255,0.05)] sm:rounded-[30px] sm:p-4">
+                    <div className="mb-3 flex flex-wrap items-start justify-between gap-3 md:mb-4">
                       <div>
                         <div className="text-[11px] uppercase tracking-[0.22em] text-white/46">Scenario readout</div>
                         <h2 className="mt-2 text-lg font-medium text-white">Runway distribution</h2>
                       </div>
                       <div className="flex flex-wrap gap-2">
-                        <div className="rounded-full border border-white/10 bg-white/5 px-3 py-1.5 font-mono text-[11px] text-white/62 tabular-nums">
+                        <div className="hidden rounded-full border border-white/10 bg-white/5 px-3 py-1.5 font-mono text-[11px] text-white/62 tabular-nums md:block">
                           {chartSummary.horizon} months
                         </div>
-                        <div className="hidden rounded-full border border-white/10 bg-white/5 px-3 py-1.5 font-mono text-[11px] text-white/62 tabular-nums sm:block">
+                        {mobileFocusLabel ? (
+                          <div className="rounded-full border border-emerald-200/16 bg-emerald-300/8 px-3 py-1.5 font-mono text-[11px] text-emerald-100/76 tabular-nums md:hidden">
+                            {mobileFocusLabel}
+                          </div>
+                        ) : null}
+                        <div className="hidden rounded-full border border-white/10 bg-white/5 px-3 py-1.5 font-mono text-[11px] text-white/62 tabular-nums md:block">
                           P90 {formatCurrency(chartSummary.optimisticEndingBalance, currencySymbol)}
                         </div>
-                        <div className="hidden rounded-full border border-white/10 bg-white/5 px-3 py-1.5 font-mono text-[11px] text-white/62 tabular-nums sm:block">
+                        <div className="hidden rounded-full border border-white/10 bg-white/5 px-3 py-1.5 font-mono text-[11px] text-white/62 tabular-nums md:block">
                           P10 {formatCurrency(chartSummary.pessimisticEndingBalance, currencySymbol)}
                         </div>
                       </div>
                     </div>
 
-                    <div className="-mx-2 overflow-x-auto px-2 pb-2 sm:mx-0 sm:overflow-visible sm:px-0 sm:pb-0">
-                      <div className="relative h-[390px] min-h-[390px] min-w-[560px] overflow-hidden rounded-[28px] border border-white/10 bg-[radial-gradient(circle_at_top_left,rgba(16,185,129,0.10),transparent_32%),linear-gradient(180deg,rgba(255,255,255,0.04),rgba(255,255,255,0.01))] p-2 sm:h-[380px] sm:min-h-[380px] sm:min-w-0 lg:h-[430px] lg:min-h-[430px]">
+                    <div className="md:hidden">
+                      <div className="relative h-[315px] min-h-[315px] min-w-0 overflow-hidden rounded-[22px] border border-white/10 bg-[radial-gradient(circle_at_24%_12%,rgba(16,185,129,0.13),transparent_36%),linear-gradient(180deg,rgba(255,255,255,0.04),rgba(255,255,255,0.012))] px-1.5 py-2 shadow-[inset_0_1px_0_rgba(255,255,255,0.05),0_0_38px_rgba(16,185,129,0.05)]">
                         {whatIfSimulation.isPending ? (
                           <div
                             aria-live="polite"
@@ -2142,105 +2197,224 @@ export default function SimulatorClient() {
                         <ResponsiveContainer
                           width="100%"
                           height="100%"
-                          minWidth={520}
+                          minHeight={292}
+                          initialDimension={{ width: 360, height: 292 }}
+                        >
+                          <ComposedChart data={mobileChartData} margin={{ top: 12, right: 12, bottom: 6, left: -8 }}>
+                            <defs>
+                              <linearGradient id="chartBand" x1="0" x2="0" y1="0" y2="1">
+                                <stop offset="0%" stopColor="rgba(16,185,129,0.24)" />
+                                <stop offset="58%" stopColor="rgba(16,185,129,0.10)" />
+                                <stop offset="100%" stopColor="rgba(255,255,255,0.02)" />
+                              </linearGradient>
+                              <filter id="quantileGlow" height="160%" width="160%" x="-30%" y="-30%">
+                                <feGaussianBlur result="blur" stdDeviation="3" />
+                                <feMerge>
+                                  <feMergeNode in="blur" />
+                                  <feMergeNode in="SourceGraphic" />
+                                </feMerge>
+                              </filter>
+                            </defs>
+
+                            <CartesianGrid stroke="rgba(255,255,255,0.045)" strokeDasharray="3 7" vertical={false} />
+                            <XAxis
+                              axisLine={false}
+                              dataKey="month"
+                              ticks={mobileXAxisTicks}
+                              tick={{
+                                fill: "rgba(255,255,255,0.44)",
+                                fontSize: 10,
+                                fontFamily: "ui-monospace, SFMono-Regular, monospace",
+                              }}
+                              tickFormatter={(value: number) => `M${value}`}
+                              tickLine={false}
+                            />
+                            <YAxis
+                              axisLine={false}
+                              domain={[
+                                (dataMin: number) => Math.min(dataMin, 0),
+                                (dataMax: number) => Math.max(dataMax, 0),
+                              ]}
+                              tick={{
+                                fill: "rgba(255,255,255,0.42)",
+                                fontSize: 10,
+                                fontFamily: "ui-monospace, SFMono-Regular, monospace",
+                              }}
+                              tickCount={4}
+                              tickFormatter={(value: number) => formatMobileAxisCurrency(value, currencySymbol)}
+                              tickLine={false}
+                              width={48}
+                            />
+                            <ReferenceLine stroke="rgba(255,255,255,0.16)" strokeDasharray="4 6" y={0} />
+                            <Tooltip
+                              cursor={{ stroke: "rgba(255,255,255,0.24)", strokeWidth: 1, strokeDasharray: "3 3" }}
+                              content={<CustomTooltip currencySymbol={currencySymbol} />}
+                            />
+
+                            {mobileRawSeriesKeys.map((key) => (
+                              <Line
+                                key={key}
+                                dataKey={key}
+                                dot={false}
+                                activeDot={false}
+                                isAnimationActive={false}
+                                stroke="rgba(255,255,255,0.08)"
+                                strokeWidth={1}
+                                strokeLinecap="round"
+                                type="linear"
+                              />
+                            ))}
+
+                            <Area dataKey="band" fill="url(#chartBand)" stroke="none" opacity={0.3} type="linear" />
+
+                            <Line
+                              dataKey="p90"
+                              dot={false}
+                              filter="url(#quantileGlow)"
+                              isAnimationActive={false}
+                              stroke="rgba(236,253,245,0.76)"
+                              strokeDasharray="5 6"
+                              strokeWidth={2}
+                              type="linear"
+                            />
+                            <Line
+                              dataKey="p50"
+                              dot={false}
+                              filter="url(#quantileGlow)"
+                              isAnimationActive={false}
+                              stroke="#10b981"
+                              strokeWidth={3.5}
+                              type="linear"
+                            />
+                            <Line
+                              dataKey="p10"
+                              dot={false}
+                              filter="url(#quantileGlow)"
+                              isAnimationActive={false}
+                              stroke="rgba(167,243,208,0.62)"
+                              strokeDasharray="5 6"
+                              strokeWidth={2}
+                              type="linear"
+                            />
+                          </ComposedChart>
+                        </ResponsiveContainer>
+                      </div>
+                    </div>
+
+                    <div className="hidden md:block">
+                      <div className="relative h-[380px] min-h-[380px] min-w-0 overflow-hidden rounded-[28px] border border-white/10 bg-[radial-gradient(circle_at_top_left,rgba(16,185,129,0.10),transparent_32%),linear-gradient(180deg,rgba(255,255,255,0.04),rgba(255,255,255,0.01))] p-2 lg:h-[430px] lg:min-h-[430px]">
+                        {whatIfSimulation.isPending ? (
+                          <div
+                            aria-live="polite"
+                            className="absolute inset-0 z-10 grid place-items-center bg-black/36 backdrop-blur-[2px]"
+                          >
+                            <div className="inline-flex items-center gap-3 rounded-full border border-emerald-200/20 bg-black/52 px-4 py-2 font-mono text-[11px] uppercase tracking-[0.16em] text-emerald-100 shadow-[0_18px_60px_rgba(0,0,0,0.32)]">
+                              <span className="h-3 w-3 animate-spin rounded-full border border-emerald-100/80 border-t-transparent" />
+                              Recalculating
+                            </div>
+                          </div>
+                        ) : null}
+                        <ResponsiveContainer
+                          width="100%"
+                          height="100%"
                           minHeight={360}
-                          initialDimension={{ width: 620, height: 360 }}
+                          initialDimension={{ width: 720, height: 360 }}
                         >
                           <ComposedChart data={chartData} margin={{ top: 14, right: 24, bottom: 12, left: 8 }}>
-                          <defs>
-                            <linearGradient id="chartBand" x1="0" x2="0" y1="0" y2="1">
-                              <stop offset="0%" stopColor="rgba(16,185,129,0.22)" />
-                              <stop offset="55%" stopColor="rgba(16,185,129,0.12)" />
-                              <stop offset="100%" stopColor="rgba(255,255,255,0.02)" />
-                            </linearGradient>
-                            <filter id="quantileGlow" height="160%" width="160%" x="-30%" y="-30%">
-                              <feGaussianBlur result="blur" stdDeviation="3" />
-                              <feMerge>
-                                <feMergeNode in="blur" />
-                                <feMergeNode in="SourceGraphic" />
-                              </feMerge>
-                            </filter>
-                          </defs>
+                            <defs>
+                              <linearGradient id="chartBandDesktop" x1="0" x2="0" y1="0" y2="1">
+                                <stop offset="0%" stopColor="rgba(16,185,129,0.22)" />
+                                <stop offset="55%" stopColor="rgba(16,185,129,0.12)" />
+                                <stop offset="100%" stopColor="rgba(255,255,255,0.02)" />
+                              </linearGradient>
+                              <filter id="quantileGlowDesktop" height="160%" width="160%" x="-30%" y="-30%">
+                                <feGaussianBlur result="blur" stdDeviation="3" />
+                                <feMerge>
+                                  <feMergeNode in="blur" />
+                                  <feMergeNode in="SourceGraphic" />
+                                </feMerge>
+                              </filter>
+                            </defs>
 
-                          <CartesianGrid stroke="rgba(255,255,255,0.06)" strokeDasharray="3 3" vertical={false} />
-                          <XAxis
-                            axisLine={false}
-                            dataKey="month"
-                            interval="preserveStartEnd"
-                            tick={{
-                              fill: "rgba(255,255,255,0.46)",
-                              fontSize: 12,
-                              fontFamily: "ui-monospace, SFMono-Regular, monospace",
-                            }}
-                            tickFormatter={(value: number) => `M${value}`}
-                            tickLine={false}
-                          />
-                          <YAxis
-                            axisLine={false}
-                            domain={[
-                              (dataMin: number) => Math.min(dataMin, 0),
-                              (dataMax: number) => Math.max(dataMax, 0),
-                            ]}
-                            tick={{
-                              fill: "rgba(255,255,255,0.46)",
-                              fontSize: 12,
-                              fontFamily: "ui-monospace, SFMono-Regular, monospace",
-                            }}
-                            tickFormatter={(value: number) => formatAxisCurrency(value, currencySymbol)}
-                            tickLine={false}
-                            width={72}
-                          />
-                          <ReferenceLine stroke="rgba(255,255,255,0.14)" strokeDasharray="4 4" y={0} />
-                          <Tooltip
-                            cursor={{ stroke: "rgba(255,255,255,0.24)", strokeWidth: 1, strokeDasharray: "3 3" }}
-                            content={<CustomTooltip currencySymbol={currencySymbol} />}
-                          />
+                            <CartesianGrid stroke="rgba(255,255,255,0.06)" strokeDasharray="3 3" vertical={false} />
+                            <XAxis
+                              axisLine={false}
+                              dataKey="month"
+                              interval="preserveStartEnd"
+                              tick={{
+                                fill: "rgba(255,255,255,0.46)",
+                                fontSize: 12,
+                                fontFamily: "ui-monospace, SFMono-Regular, monospace",
+                              }}
+                              tickFormatter={(value: number) => `M${value}`}
+                              tickLine={false}
+                            />
+                            <YAxis
+                              axisLine={false}
+                              domain={[
+                                (dataMin: number) => Math.min(dataMin, 0),
+                                (dataMax: number) => Math.max(dataMax, 0),
+                              ]}
+                              tick={{
+                                fill: "rgba(255,255,255,0.46)",
+                                fontSize: 12,
+                                fontFamily: "ui-monospace, SFMono-Regular, monospace",
+                              }}
+                              tickFormatter={(value: number) => formatAxisCurrency(value, currencySymbol)}
+                              tickLine={false}
+                              width={72}
+                            />
+                            <ReferenceLine stroke="rgba(255,255,255,0.14)" strokeDasharray="4 4" y={0} />
+                            <Tooltip
+                              cursor={{ stroke: "rgba(255,255,255,0.24)", strokeWidth: 1, strokeDasharray: "3 3" }}
+                              content={<CustomTooltip currencySymbol={currencySymbol} />}
+                            />
 
-                          {rawSeriesKeys.map((key) => (
+                            {rawSeriesKeys.map((key) => (
+                              <Line
+                                key={key}
+                                dataKey={key}
+                                dot={false}
+                                activeDot={false}
+                                isAnimationActive={false}
+                                stroke="rgba(255,255,255,0.09)"
+                                strokeWidth={1}
+                                strokeLinecap="round"
+                                type="monotone"
+                              />
+                            ))}
+
+                            <Area dataKey="band" fill="url(#chartBandDesktop)" stroke="none" opacity={0.26} type="monotone" />
+
                             <Line
-                              key={key}
-                              dataKey={key}
+                              dataKey="p90"
                               dot={false}
-                              activeDot={false}
+                              filter="url(#quantileGlowDesktop)"
                               isAnimationActive={false}
-                              stroke="rgba(255,255,255,0.09)"
-                              strokeWidth={1}
-                              strokeLinecap="round"
+                              stroke="rgba(236,253,245,0.82)"
+                              strokeDasharray="6 5"
+                              strokeWidth={2}
                               type="monotone"
                             />
-                          ))}
-
-                          <Area dataKey="band" fill="url(#chartBand)" stroke="none" opacity={0.26} type="monotone" />
-
-                          <Line
-                            dataKey="p90"
-                            dot={false}
-                            filter="url(#quantileGlow)"
-                            isAnimationActive={false}
-                            stroke="rgba(236,253,245,0.82)"
-                            strokeDasharray="6 5"
-                            strokeWidth={2}
-                            type="monotone"
-                          />
-                          <Line
-                            dataKey="p50"
-                            dot={false}
-                            filter="url(#quantileGlow)"
-                            isAnimationActive={false}
-                            stroke="#10b981"
-                            strokeWidth={3}
-                            type="monotone"
-                          />
-                          <Line
-                            dataKey="p10"
-                            dot={false}
-                            filter="url(#quantileGlow)"
-                            isAnimationActive={false}
-                            stroke="rgba(167,243,208,0.74)"
-                            strokeDasharray="6 5"
-                            strokeWidth={2}
-                            type="monotone"
-                          />
+                            <Line
+                              dataKey="p50"
+                              dot={false}
+                              filter="url(#quantileGlowDesktop)"
+                              isAnimationActive={false}
+                              stroke="#10b981"
+                              strokeWidth={3}
+                              type="monotone"
+                            />
+                            <Line
+                              dataKey="p10"
+                              dot={false}
+                              filter="url(#quantileGlowDesktop)"
+                              isAnimationActive={false}
+                              stroke="rgba(167,243,208,0.74)"
+                              strokeDasharray="6 5"
+                              strokeWidth={2}
+                              type="monotone"
+                            />
                           </ComposedChart>
                         </ResponsiveContainer>
                       </div>
