@@ -27,7 +27,7 @@ MAX_PAYLOAD_BYTES: Final[int] = 1_000_000
 MAX_PARSE_TEXT_CHARS: Final[int] = 6_000
 PARSE_GATE_TOKEN_ENV: Final[str] = "MONTERUN_PARSE_GATE_TOKEN"
 PARSE_GATE_HEADER: Final[str] = "X-MonteRun-Tester"
-REQUEST_TIMEOUT_SECONDS: Final[float] = 20.0
+REQUEST_TIMEOUT_SECONDS: Final[float] = 9.0
 PROJECT_ROOT: Final[Path] = Path(__file__).parent.parent.resolve()
 ENV_PATH: Final[Path] = PROJECT_ROOT / ".env"
 
@@ -71,6 +71,9 @@ MONTE_RUN_OPTIONAL_PARAM_FIELDS: Final[tuple[str, ...]] = (
 )
 CURRENCY_SYMBOL_FIELD: Final[str] = "currency_symbol"
 DEFAULT_CURRENCY_SYMBOL: Final[str] = "$"
+RESULT_LANGUAGE_FIELD: Final[str] = "language"
+DEFAULT_RESULT_LANGUAGE: Final[str] = "en"
+RUSSIAN_RESULT_LANGUAGE: Final[str] = "ru"
 LEGACY_SIMULATION_MONTHS: Final[int] = 24
 LEGACY_SIMULATION_PATHS: Final[int] = 1_000
 SUGGESTED_STRESS_TARGETS: Final[frozenset[str]] = frozenset(
@@ -90,6 +93,36 @@ SMART_LEVER_PATCH_FIELDS: Final[frozenset[str]] = frozenset(
         "burn_multiplier",
     }
 )
+MILLION_MULTIPLIER: Final[int] = 1_000_000
+MONEY_MILLION_SUFFIX_RE: Final[re.Pattern[str]] = re.compile(
+    r"(?P<number>\d+(?:[.,]\d+)?)\s*(?P<suffix>🍋|лимон(?:а|ов)?|лям(?:а|ов)?|млн|миллион(?:а|ов)?)",
+    re.IGNORECASE,
+)
+CYRILLIC_RE: Final[re.Pattern[str]] = re.compile(r"[\u0400-\u04FF]")
+NO_INCOME_RE: Final[re.Pattern[str]] = re.compile(
+    r"(нет\s+поступлен(?:ия|ий)|нет\s+дохода|не\s+работаю|уволилась|уволился)",
+    re.IGNORECASE,
+)
+ZERO_EXPENSES_RE: Final[re.Pattern[str]] = re.compile(
+    r"(нет\s+(?:расходов|трат)|без\s+(?:расходов|трат)|no\s+(?:expenses|burn|costs))",
+    re.IGNORECASE,
+)
+UNSUPPORTED_CURRENCY_RE: Final[re.Pattern[str]] = re.compile(
+    r"(₸|₽|€|£|тенге\b|руб(?:\.|лей\b|ля\b|ль\b|\b)|\b(?:kzt|rub|eur|gbp)\b)",
+    re.IGNORECASE,
+)
+BUSINESS_OPENING_RE: Final[re.Pattern[str]] = re.compile(
+    r"(открыть\s+бизнес|открыть\s+фаст\s*фуд|запустить\s+бизнес|start\s+(?:a\s+)?business|open\s+(?:a\s+)?business|launch\s+(?:a\s+)?business)",
+    re.IGNORECASE,
+)
+MISSING_EXPENSES_MESSAGE_BY_LANGUAGE: Final[dict[str, str]] = {
+    RUSSIAN_RESULT_LANGUAGE: "Не хватает данных для расчёта: укажите примерные ежемесячные расходы.",
+    DEFAULT_RESULT_LANGUAGE: "Not enough data to calculate: estimate your monthly expenses.",
+}
+UNSUPPORTED_CURRENCY_MESSAGE_BY_LANGUAGE: Final[dict[str, str]] = {
+    RUSSIAN_RESULT_LANGUAGE: "MonteRun сейчас считает только в USD. Переведите суммы в доллары и отправьте сценарий ещё раз.",
+    DEFAULT_RESULT_LANGUAGE: "MonteRun currently calculates in USD only. Convert the amounts to dollars and send the scenario again.",
+}
 
 EXTRACTION_SYSTEM_PROMPT: Final[str] = """
 You are the MonteRun Extraction Layer.
@@ -101,7 +134,7 @@ Your job is to extract five fields for MonteRunParams from the user's text:
 - income_delay_months
 
 CRITICAL RULE:
-NEVER ask follow-up questions. NEVER enter a conversational loop. If exact numbers are missing, CALCULATE them from context (e.g., '3 clients for $2000' = $6000 monthly income) or make pessimistic assumptions. You MUST ALWAYS output the final JSON and nothing else.
+Do not invent required financial inputs. If cash, monthly_income, fixed_expenses, or flexible_expenses are not explicit or directly derived from the user's text or BASE_CONTEXT_JSON, return needs_clarification for the missing field. If numbers are present, CALCULATE them from context (e.g., '3 clients for $2000' = $6000 monthly income) and choose the pessimistic side of ranges.
 NO REASONING OUTPUT: Do not write chain-of-thought, analysis, explanation, preamble, apology, markdown, or prose before/after JSON. Return raw JSON only. Start with { and end with }.
 
 Return a strict JSON object and nothing except JSON.
@@ -118,7 +151,7 @@ READY format:
     "currency_symbol": "$"
   },
   "question": null,
-  "comment": "short dry English line",
+  "comment": "short dry line in the requested result language",
   "assumptions": [
     {
       "text": "the user's weakest optimistic assumption",
@@ -145,8 +178,16 @@ READY format:
   ]
 }
 
+NEEDS_CLARIFICATION format:
+{
+  "status": "needs_clarification",
+  "params": null,
+  "question": "one direct question for the missing required input",
+  "comment": "same language as RESULT_LANGUAGE"
+}
+
 Rules:
-- Always return status = "ready" with final params. Do not return needs_clarification; that status exists only for legacy compatibility outside this prompt.
+- Return status = "ready" only when the required inputs are present or directly derivable. Return needs_clarification for missing required inputs.
 - Use BASE_CONTEXT_JSON as trusted memory when it is provided.
 - If USER_MESSAGE contains an explicit new number, it overrides older context.
 - Calculate derived metrics instead of asking: multiply count * price, sum recurring cost categories, infer monthly amounts when text clearly says per month/monthly, use lower income ranges and upper expense ranges, and choose pessimistic defaults when unavoidable.
@@ -171,8 +212,8 @@ Rules:
 - Bind every lever to parsed facts: if the user is a freelancer, solo founder, student, or employee with no staff/payroll, do not suggest firing staff, cutting payroll, renegotiating team salaries, or other advice that assumes employees. If staff/payroll is not explicitly present, staff-related levers are forbidden.
 - Do not invent assets, employees, inventory, loans, clients, or dependents that are not stated or strongly implied by the user context.
 - Currency is hard-locked to USD. Always return "currency_symbol": "$" even when the user mentions another currency.
-- LANGUAGE RULE: All user-facing text fields must be English, including comment, question, assumptions[*].text, assumptions[*].risk, and smart_levers[*].title.
-- If a field is not explicit even after BASE_CONTEXT_JSON, prefer a pessimistic, clearly finance-grounded default over clarification.
+- LANGUAGE RULE: Use RESULT_LANGUAGE for all user-facing text fields, including comment, question, assumptions[*].text, assumptions[*].risk, and smart_levers[*].title. RESULT_LANGUAGE = ru means Russian. RESULT_LANGUAGE = en means English.
+- If a required field is not explicit even after BASE_CONTEXT_JSON, ask one direct clarification question instead of guessing.
 - All numbers must be non-negative.
 - If the user gives an income range, use the lower bound.
 - If the user gives an expense range, use the upper bound.
@@ -190,17 +231,17 @@ CRITICAL OUTPUT RULE: Do not write chain-of-thought, analysis, explanation, prea
 
 Return a strict JSON object:
 {
-  "verdict": "[INSERT ENGLISH VERDICT]",
-  "comment": "[INSERT 2-4 SHORT ENGLISH SENTENCES]",
+  "verdict": "[INSERT VERDICT IN RESULT_LANGUAGE]",
+  "comment": "[INSERT 2-4 SHORT SENTENCES IN RESULT_LANGUAGE]",
   "levers": [
-    { "action": "[INSERT ENGLISH LEVER LABEL]" },
-    { "action": "[INSERT ENGLISH LEVER LABEL]" },
-    { "action": "[INSERT ENGLISH LEVER LABEL]" }
+    { "action": "[INSERT LEVER LABEL IN RESULT_LANGUAGE]" },
+    { "action": "[INSERT LEVER LABEL IN RESULT_LANGUAGE]" },
+    { "action": "[INSERT LEVER LABEL IN RESULT_LANGUAGE]" }
   ]
 }
 
 Rules:
-- CRITICAL: Every user-facing text property must be English, including verdict, comment, and levers[*].action.
+- CRITICAL: Every user-facing text property must follow RESULT_LANGUAGE, including verdict, comment, and levers[*].action. RESULT_LANGUAGE = ru means Russian. RESULT_LANGUAGE = en means English.
 - Tone: cold, cynical, financial-terminal, techno-trash from Almaty.
 - It is appropriate to use words like hustle, cooked, runway, ngmi, and survival rate.
 - Rely only on the provided numbers and levers.
@@ -211,11 +252,19 @@ Rules:
 - Do not mention the old brand. Only MonteRun.
 """.strip()
 
-FIELD_QUESTIONS: Final[dict[str, str]] = {
-    "cash": "How much cash do you have right now?",
-    "monthly_income": "What is your average monthly income?",
-    "fixed_expenses": "What are your mandatory fixed expenses per month?",
-    "flexible_expenses": "What do you spend monthly on flexible or discretionary costs?",
+FIELD_QUESTIONS: Final[dict[str, dict[str, str]]] = {
+    DEFAULT_RESULT_LANGUAGE: {
+        "cash": "How much cash do you have right now?",
+        "monthly_income": "What is your average monthly income?",
+        "fixed_expenses": "What are your mandatory fixed expenses per month?",
+        "flexible_expenses": "What do you spend monthly on flexible or discretionary costs?",
+    },
+    RUSSIAN_RESULT_LANGUAGE: {
+        "cash": "Сколько денег сейчас доступно?",
+        "monthly_income": "Какой средний ежемесячный доход сейчас?",
+        "fixed_expenses": "Какие обязательные ежемесячные расходы?",
+        "flexible_expenses": "Какие переменные ежемесячные расходы?",
+    },
 }
 
 LOGGER = logging.getLogger(__name__)
@@ -352,7 +401,15 @@ def _clean_text(value: str) -> str:
     return " ".join(value.split())
 
 
-def _parse_numeric_string(value: str) -> float:
+def _format_normalized_money_amount(value: float) -> str:
+    rounded = round(value)
+    if abs(value - rounded) < 0.000001:
+        return str(int(rounded))
+
+    return f"{value:.2f}".rstrip("0").rstrip(".")
+
+
+def _parse_plain_numeric_string(value: str) -> float:
     normalized = value.strip()
     if not normalized:
         raise ValueError("empty string")
@@ -371,6 +428,88 @@ def _parse_numeric_string(value: str) -> float:
             normalized = normalized.replace(",", "")
 
     return float(normalized)
+
+
+def _parse_money_slang_amount(value: str) -> float | None:
+    match = MONEY_MILLION_SUFFIX_RE.search(value)
+    if match is None:
+        return None
+
+    amount = _parse_plain_numeric_string(match.group("number"))
+    return amount * MILLION_MULTIPLIER
+
+
+def _parse_numeric_string(value: str) -> float:
+    slang_amount = _parse_money_slang_amount(value)
+    if slang_amount is not None:
+        return slang_amount
+
+    return _parse_plain_numeric_string(value)
+
+
+def _normalize_money_slang_text(value: str) -> str:
+    def _replace(match: re.Match[str]) -> str:
+        amount = _parse_plain_numeric_string(match.group("number")) * MILLION_MULTIPLIER
+        return _format_normalized_money_amount(amount)
+
+    return MONEY_MILLION_SUFFIX_RE.sub(_replace, value)
+
+
+def _extract_parser_user_text(parser_input: str | None) -> str:
+    if not parser_input:
+        return ""
+
+    if PARSER_INPUT_USER_MESSAGE_PREFIX in parser_input:
+        return parser_input.rsplit(PARSER_INPUT_USER_MESSAGE_PREFIX, 1)[1].strip()
+
+    return parser_input.strip()
+
+
+def _normalize_result_language(value: Any) -> str:
+    return RUSSIAN_RESULT_LANGUAGE if value == RUSSIAN_RESULT_LANGUAGE else DEFAULT_RESULT_LANGUAGE
+
+
+def _detect_result_language(text: str | None) -> str:
+    return RUSSIAN_RESULT_LANGUAGE if CYRILLIC_RE.search(_extract_parser_user_text(text)) else DEFAULT_RESULT_LANGUAGE
+
+
+def _result_language_instruction(language: str) -> str:
+    if _normalize_result_language(language) == RUSSIAN_RESULT_LANGUAGE:
+        return (
+            "RESULT_LANGUAGE: ru. All user-facing text fields must be Russian. "
+            "Keep JSON keys unchanged."
+        )
+
+    return (
+        "RESULT_LANGUAGE: en. All user-facing text fields must be English. "
+        "Keep JSON keys unchanged."
+    )
+
+
+def _has_explicit_no_income(text: str | None) -> bool:
+    return bool(NO_INCOME_RE.search(_extract_parser_user_text(text)))
+
+
+def _has_explicit_zero_expenses(text: str | None) -> bool:
+    return bool(ZERO_EXPENSES_RE.search(_extract_parser_user_text(text)))
+
+
+def _has_unsupported_currency(text: str | None) -> bool:
+    return bool(UNSUPPORTED_CURRENCY_RE.search(_extract_parser_user_text(text)))
+
+
+def _describes_opening_business(text: str | None) -> bool:
+    return bool(BUSINESS_OPENING_RE.search(_extract_parser_user_text(text)))
+
+
+def _extract_cash_money_slang_amount(text: str | None) -> float | None:
+    user_text = _extract_parser_user_text(text)
+    for match in MONEY_MILLION_SUFFIX_RE.finditer(user_text):
+        prefix = user_text[max(0, match.start() - 36) : match.start()].casefold()
+        if any(signal in prefix for signal in ("у меня есть", "есть", "имею", "имеется", "накоп", "подуш", "cash", "capital")):
+            return _parse_plain_numeric_string(match.group("number")) * MILLION_MULTIPLIER
+
+    return None
 
 
 def _coerce_non_negative_float(
@@ -900,8 +1039,9 @@ def _build_parser_context_payload(
 
 
 def _build_parser_input(user_text: str, parser_context_payload: Mapping[str, Any] | None) -> str:
+    normalized_user_text = _normalize_money_slang_text(user_text)
     if not parser_context_payload:
-        return user_text
+        return normalized_user_text
 
     context_json = json.dumps(parser_context_payload, ensure_ascii=False, separators=(",", ":"))
     last_bot_question = _extract_last_bot_question(parser_context_payload)
@@ -912,7 +1052,7 @@ def _build_parser_input(user_text: str, parser_context_payload: Mapping[str, Any
         "Use BASE_CONTEXT_JSON as trusted prior memory. "
         "If there is LAST_BOT_QUESTION, use it to interpret short follow-up answers. "
         "If USER_MESSAGE explicitly overrides a field, the new explicit value wins.\n"
-        f"{PARSER_INPUT_USER_MESSAGE_PREFIX}{user_text}"
+        f"{PARSER_INPUT_USER_MESSAGE_PREFIX}{normalized_user_text}"
     )
 
 
@@ -1250,7 +1390,7 @@ def _missing_param_fields(value: Mapping[str, Any]) -> list[str]:
     return [field for field in MONTE_RUN_PARAM_FIELDS if value.get(field) is None]
 
 
-def _extract_optional_non_negative_float(value: Any) -> float | None:
+def _get_optional_non_negative_float(value: Any) -> float | None:
     if value is None or isinstance(value, bool):
         return None
 
@@ -1265,36 +1405,86 @@ def _extract_optional_non_negative_float(value: Any) -> float | None:
     return float(numeric_value)
 
 
-def _apply_pessimistic_param_defaults(value: Mapping[str, Any]) -> dict[str, Any]:
-    filled: dict[str, Any] = dict(value)
+def _monthly_expenses_are_missing(value: Mapping[str, Any], parser_input: str | None = None) -> bool:
+    fixed_expenses = _get_optional_non_negative_float(value.get("fixed_expenses"))
+    flexible_expenses = _get_optional_non_negative_float(value.get("flexible_expenses"))
 
-    if filled.get("cash") is None:
-        filled["cash"] = 0.0
-    if filled.get("monthly_income") is None:
-        filled["monthly_income"] = 0.0
+    if fixed_expenses is None and flexible_expenses is None:
+        return True
 
-    fixed_missing = filled.get("fixed_expenses") is None
-    flexible_missing = filled.get("flexible_expenses") is None
+    monthly_burn = (fixed_expenses or 0.0) + (flexible_expenses or 0.0)
+    if monthly_burn > 0.0:
+        return False
 
-    if fixed_missing and flexible_missing:
-        cash = _extract_optional_non_negative_float(filled.get("cash")) or 0.0
-        monthly_income = _extract_optional_non_negative_float(filled.get("monthly_income")) or 0.0
-        filled["fixed_expenses"] = max(monthly_income, cash / LEGACY_SIMULATION_MONTHS, 1.0)
+    return not _has_explicit_zero_expenses(parser_input)
+
+
+def _fill_known_expense_component_defaults(value: Mapping[str, Any]) -> dict[str, Any]:
+    filled = dict(value)
+    if filled.get("fixed_expenses") is None and filled.get("flexible_expenses") is not None:
+        filled["fixed_expenses"] = 0.0
+    if filled.get("flexible_expenses") is None and filled.get("fixed_expenses") is not None:
         filled["flexible_expenses"] = 0.0
-    else:
-        if fixed_missing:
-            filled["fixed_expenses"] = 0.0
-        if flexible_missing:
-            filled["flexible_expenses"] = 0.0
 
     return filled
 
 
-def _build_clarification_question(missing_fields: list[str]) -> str:
-    if not missing_fields:
-        return "What are your current cash, income, and expenses?"
+def _build_missing_expenses_result(
+    *,
+    language: str,
+    currency_symbol: str,
+    parser_input: str | None,
+) -> dict[str, Any]:
+    normalized_language = _normalize_result_language(language)
+    message = MISSING_EXPENSES_MESSAGE_BY_LANGUAGE[normalized_language]
+    missing_fields = ["monthly_expenses"]
+    optional_missing_fields = ["expected_business_income"] if _describes_opening_business(parser_input) else []
 
-    return FIELD_QUESTIONS[missing_fields[0]]
+    return {
+        "status": "needs_clarification",
+        "params": None,
+        CURRENCY_SYMBOL_FIELD: currency_symbol,
+        RESULT_LANGUAGE_FIELD: normalized_language,
+        "question": message,
+        "comment": message,
+        "missing_fields": missing_fields,
+        "optional_missing_fields": optional_missing_fields,
+    }
+
+
+def _build_unsupported_currency_result(
+    *,
+    language: str,
+    currency_symbol: str,
+) -> dict[str, Any]:
+    normalized_language = _normalize_result_language(language)
+    message = UNSUPPORTED_CURRENCY_MESSAGE_BY_LANGUAGE[normalized_language]
+
+    return {
+        "status": "needs_clarification",
+        "params": None,
+        CURRENCY_SYMBOL_FIELD: currency_symbol,
+        RESULT_LANGUAGE_FIELD: normalized_language,
+        "question": message,
+        "comment": message,
+        "missing_fields": ["usd_converted_amounts"],
+    }
+
+
+def _build_clarification_question(
+    missing_fields: list[str],
+    language: str = DEFAULT_RESULT_LANGUAGE,
+) -> str:
+    normalized_language = _normalize_result_language(language)
+    if not missing_fields:
+        return (
+            "Какие сейчас деньги, доход и ежемесячные расходы?"
+            if normalized_language == RUSSIAN_RESULT_LANGUAGE
+            else "What are your current cash, income, and expenses?"
+        )
+
+    localized_questions = FIELD_QUESTIONS[normalized_language]
+    return localized_questions.get(missing_fields[0], localized_questions["fixed_expenses"])
 
 
 def _normalize_assumptions(value: Any) -> list[dict[str, Any]]:
@@ -1463,6 +1653,7 @@ def _normalize_smart_levers(value: Any) -> list[dict[str, Any]]:
 def _normalize_extraction_payload(
     payload: dict[str, Any],
     fallback_params: Mapping[str, Any] | None = None,
+    parser_input: str | None = None,
 ) -> dict[str, Any]:
     status = payload.get("status")
     if status not in {"ready", "needs_clarification"}:
@@ -1485,16 +1676,69 @@ def _normalize_extraction_payload(
         )
     cleaned_comment = _clean_text(comment)
 
+    language = _detect_result_language(parser_input) if parser_input is not None else _normalize_result_language(payload.get(RESULT_LANGUAGE_FIELD))
     raw_params = payload.get("params")
     merged_params = _merge_extracted_params(raw_params, fallback_params)
+
+    if _has_explicit_no_income(parser_input):
+        merged_params["monthly_income"] = 0.0
+
+    cash_slang_amount = _extract_cash_money_slang_amount(parser_input)
+    if cash_slang_amount is not None:
+        merged_params["cash"] = cash_slang_amount
+
     currency_symbol = _normalize_currency_symbol(merged_params.get(CURRENCY_SYMBOL_FIELD))
+
+    if _has_unsupported_currency(parser_input):
+        return _build_unsupported_currency_result(
+            language=language,
+            currency_symbol=currency_symbol,
+        )
+
+    if _monthly_expenses_are_missing(merged_params, parser_input):
+        return _build_missing_expenses_result(
+            language=language,
+            currency_symbol=currency_symbol,
+            parser_input=parser_input,
+        )
+
+    merged_params = _fill_known_expense_component_defaults(merged_params)
     missing_fields = _missing_param_fields(merged_params)
+    if missing_fields:
+        question = payload.get("question")
+        cleaned_question = _clean_text(question) if isinstance(question, str) and question.strip() else _build_clarification_question(missing_fields, language)
+        return {
+            "status": "needs_clarification",
+            "params": None,
+            CURRENCY_SYMBOL_FIELD: currency_symbol,
+            RESULT_LANGUAGE_FIELD: language,
+            "question": cleaned_question,
+            "comment": cleaned_comment,
+            "missing_fields": missing_fields,
+        }
+
+    if status == "needs_clarification":
+        question = payload.get("question")
+        if not isinstance(question, str) or not question.strip():
+            raise ApiProblem(
+                "INVALID_PARAMS",
+                "DeepSeek extraction returned invalid JSON",
+                {"stage": "extraction", "field": "question"},
+                False,
+                400,
+            )
+
+        return {
+            "status": "needs_clarification",
+            "params": None,
+            CURRENCY_SYMBOL_FIELD: currency_symbol,
+            RESULT_LANGUAGE_FIELD: language,
+            "question": _clean_text(question),
+            "comment": cleaned_comment,
+        }
+
     assumptions = _normalize_assumptions(payload.get("assumptions"))
     smart_levers = _normalize_smart_levers(payload.get("smart_levers"))
-
-    if missing_fields:
-        LOGGER.info("DeepSeek extraction omitted fields; applying pessimistic defaults: %s", missing_fields)
-        merged_params = _apply_pessimistic_param_defaults(merged_params)
 
     normalized_params = {
         field: _coerce_non_negative_float(field, merged_params[field], stage="extraction")
@@ -1522,6 +1766,7 @@ def _normalize_extraction_payload(
         "params": normalized_params,
         "question": None,
         "comment": cleaned_comment,
+        RESULT_LANGUAGE_FIELD: language,
     }
     if assumptions:
         result["assumptions"] = assumptions
@@ -1530,14 +1775,15 @@ def _normalize_extraction_payload(
 
 
 def _call_extraction_stage(parser_input: str) -> dict[str, Any]:
+    language = _detect_result_language(parser_input)
     raw_payload = _call_deepseek_json(
-        system_prompt=EXTRACTION_SYSTEM_PROMPT,
-        user_content=parser_input,
+        system_prompt=f"{EXTRACTION_SYSTEM_PROMPT}\n\n{_result_language_instruction(language)}",
+        user_content=f"{_result_language_instruction(language)}\n{parser_input}",
         stage="extraction",
         temperature=0.1,
         max_tokens=DEEPSEEK_EXTRACTION_MAX_TOKENS,
     )
-    return _normalize_extraction_payload(raw_payload, _extract_context_params(parser_input))
+    return _normalize_extraction_payload(raw_payload, _extract_context_params(parser_input), parser_input)
 
 
 @lru_cache(maxsize=1)
@@ -1974,17 +2220,100 @@ def _normalize_roast_payload(payload: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _format_alpha_metric(value: float) -> str:
+    rounded = round(float(value), 1)
+    return str(int(rounded)) if rounded.is_integer() else f"{rounded:.1f}"
+
+
+def _extract_lever_actions(simulation_result: Mapping[str, Any]) -> list[str]:
+    normalized_result = _normalize_simulation_result(simulation_result)
+    levers = normalized_result.get("levers")
+    if not isinstance(levers, list) or len(levers) != 3:
+        raise ApiProblem(
+            "INVALID_PARAMS",
+            "MonteRun math core returned an invalid levers payload",
+            {"stage": "simulation", "reason": "invalid_levers"},
+            False,
+            400,
+        )
+
+    actions: list[str] = []
+    for index, lever in enumerate(levers):
+        if not isinstance(lever, Mapping):
+            raise ApiProblem(
+                "INVALID_PARAMS",
+                "MonteRun math core returned an invalid lever",
+                {"stage": "simulation", "index": index},
+                False,
+                400,
+            )
+
+        action = lever.get("title") or lever.get("action")
+        if not isinstance(action, str) or not action.strip():
+            raise ApiProblem(
+                "INVALID_PARAMS",
+                "MonteRun math core returned an invalid lever action",
+                {"stage": "simulation", "index": index},
+                False,
+                400,
+            )
+
+        actions.append(_clean_text(action))
+
+    return actions
+
+
+def _build_deterministic_roast_payload(
+    simulation_result: Mapping[str, Any],
+    language: str = DEFAULT_RESULT_LANGUAGE,
+) -> dict[str, Any]:
+    normalized_language = _normalize_result_language(language)
+    normalized_result = _normalize_simulation_result(simulation_result)
+    runway = float(normalized_result["base_runway_months"])
+    survival = float(normalized_result["survival_probability_12m"])
+    runway_label = _format_alpha_metric(runway)
+    survival_label = _format_alpha_metric(survival)
+
+    if normalized_language == RUSSIAN_RESULT_LANGUAGE:
+        if survival < 20.0 or runway < 3.0:
+            verdict = f"Критический запас: {runway_label} мес. и {survival_label}% выживаемости за 12м."
+        elif survival < 50.0 or runway < 6.0:
+            verdict = f"Хрупкий план: {runway_label} мес. запаса и {survival_label}% выживаемости за 12м."
+        else:
+            verdict = f"План держится: {runway_label} мес. запаса и {survival_label}% выживаемости за 12м."
+        comment = "MonteRun использовал только извлечённые деньги, доход, расходы и задержку. Рычаги ниже пересчитаны математическим ядром."
+    else:
+        if survival < 20.0 or runway < 3.0:
+            verdict = f"Critical runway: {runway_label} months and {survival_label}% 12m survival."
+        elif survival < 50.0 or runway < 6.0:
+            verdict = f"Fragile plan: {runway_label} months and {survival_label}% 12m survival."
+        else:
+            verdict = f"Plan holds: {runway_label} months and {survival_label}% 12m survival."
+        comment = "MonteRun used only parsed cash, income, burn, and delay. The levers below are recalculated by the math core."
+
+    return _normalize_roast_payload(
+        {
+            "verdict": verdict,
+            "comment": comment,
+            "lever_actions": _extract_lever_actions(normalized_result),
+        }
+    )
+
+
 def _call_roast_stage(
     *,
     user_text: str,
     extracted_params: Mapping[str, Any],
     simulation_result: Mapping[str, Any],
+    language: str = DEFAULT_RESULT_LANGUAGE,
 ) -> dict[str, Any]:
+    normalized_language = _normalize_result_language(language)
     roast_input = (
+        f"{_result_language_instruction(normalized_language)}\n\n"
         "Original user request anchor:\n"
         f"{user_text.strip()}\n\n"
         "CRITICAL LANGUAGE ANCHOR:\n"
-        "Use only the Original user request above to determine the response language.\n\n"
+        "Use RESULT_LANGUAGE for every user-facing response field.\n\n"
         "Extracted params:\n"
         f"{json.dumps(dict(extracted_params), ensure_ascii=False, separators=(',', ':'))}\n\n"
         "Simulation:\n"
@@ -1992,7 +2321,7 @@ def _call_roast_stage(
     )
 
     raw_payload = _call_deepseek_json(
-        system_prompt=ROAST_SYSTEM_PROMPT,
+        system_prompt=f"{ROAST_SYSTEM_PROMPT}\n\n{_result_language_instruction(normalized_language)}",
         user_content=roast_input,
         stage="roast",
         temperature=0.9,
@@ -2045,6 +2374,7 @@ def _build_ready_data(
     currency_symbol: Any,
     roast: Mapping[str, Any],
     simulation_result: Mapping[str, Any],
+    language: str = DEFAULT_RESULT_LANGUAGE,
 ) -> dict[str, Any]:
     normalized_roast = _normalize_roast_payload(dict(roast))
     normalized_result = _apply_localized_lever_actions(
@@ -2056,6 +2386,7 @@ def _build_ready_data(
         "status": "ready",
         "params": _serialize_monte_run_params(params, currency_symbol),
         CURRENCY_SYMBOL_FIELD: _normalize_currency_symbol(currency_symbol),
+        RESULT_LANGUAGE_FIELD: _normalize_result_language(language),
         "question": None,
         "verdict": normalized_roast["verdict"],
         "comment": normalized_roast["comment"],
@@ -2067,6 +2398,7 @@ def _build_needs_clarification_data(extraction_result: Mapping[str, Any]) -> dic
     comment = extraction_result.get("comment")
     question = extraction_result.get("question")
     currency_symbol = _normalize_currency_symbol(extraction_result.get(CURRENCY_SYMBOL_FIELD))
+    language = _normalize_result_language(extraction_result.get(RESULT_LANGUAGE_FIELD))
 
     if not isinstance(comment, str) or not comment.strip():
         raise ApiProblem(
@@ -2090,6 +2422,7 @@ def _build_needs_clarification_data(extraction_result: Mapping[str, Any]) -> dic
         "status": "needs_clarification",
         "params": None,
         CURRENCY_SYMBOL_FIELD: currency_symbol,
+        RESULT_LANGUAGE_FIELD: language,
         "question": _clean_text(question),
         "comment": _clean_text(comment),
     }
@@ -2180,6 +2513,7 @@ def _call_groq(
         "params": legacy_params,
         "question": None,
         "comment": extracted["comment"],
+        RESULT_LANGUAGE_FIELD: _normalize_result_language(extracted.get(RESULT_LANGUAGE_FIELD)),
     }
     assumptions = extracted.get("assumptions")
     if isinstance(assumptions, list) and assumptions:
@@ -2296,6 +2630,7 @@ class handler(BaseHTTPRequestHandler):
                     )
 
                 currency_symbol = _normalize_currency_symbol(raw_params.get(CURRENCY_SYMBOL_FIELD))
+                result_language = _normalize_result_language(extraction_result.get(RESULT_LANGUAGE_FIELD))
                 monte_run_params = _build_monte_run_params(raw_params)
                 serialized_params = _serialize_monte_run_params(monte_run_params, currency_symbol)
                 simulation_result = _run_math_core(monte_run_params)
@@ -2306,10 +2641,9 @@ class handler(BaseHTTPRequestHandler):
                         simulation_result=simulation_result,
                         smart_levers=smart_levers,
                     )
-                roast = _call_roast_stage(
-                    user_text=user_text,
-                    extracted_params=serialized_params,
+                roast = _build_deterministic_roast_payload(
                     simulation_result=simulation_result,
+                    language=result_language,
                 )
                 localized_simulation_result = _apply_localized_lever_actions(
                     simulation_result,
@@ -2320,6 +2654,7 @@ class handler(BaseHTTPRequestHandler):
                     currency_symbol=currency_symbol,
                     roast=roast,
                     simulation_result=localized_simulation_result,
+                    language=result_language,
                 )
                 assumptions = extraction_result.get("assumptions")
                 if isinstance(assumptions, list) and assumptions:

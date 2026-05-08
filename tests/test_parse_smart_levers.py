@@ -72,6 +72,23 @@ class SmartLeverParserTests(unittest.TestCase):
             self.assertIsInstance(lever["math_patch"], dict)
             self.assertGreaterEqual(lever["impact_months"], 0.0)
 
+    def test_alpha_voice_uses_deterministic_result_and_existing_levers(self) -> None:
+        normalized = parse._normalize_extraction_payload(_payload())
+        params = parse._build_monte_run_params(normalized["params"])
+        simulation_result = parse._apply_smart_levers_to_simulation(
+            params=params,
+            simulation_result=parse._run_math_core(params),
+            smart_levers=normalized["smart_levers"],
+        )
+
+        voice = parse._build_deterministic_roast_payload(simulation_result, "en")
+
+        self.assertIn("survival", voice["verdict"])
+        self.assertEqual(
+            voice["lever_actions"],
+            [lever["action"] for lever in simulation_result["levers"]],
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -14,7 +14,7 @@ import {
   YAxis,
 } from "recharts";
 
-import { getOgImagePath, getSharePagePath } from "@/app/lib/share-card";
+import { getOgImagePath, getShareLabels, getSharePagePath, type ShareLanguage } from "@/app/lib/share-card";
 
 import WhatIfControls from "./WhatIfControls";
 import { type DebouncedSimulationError, useDebouncedSimulation } from "./useDebouncedSimulation";
@@ -111,6 +111,7 @@ type ParseReady = {
   status: "ready";
   params: SimulationParams;
   currency_symbol: string;
+  language: ShareLanguage;
   assumptions?: ParserAssumption[] | null;
   smart_levers?: SmartLever[] | null;
   question: null;
@@ -119,6 +120,7 @@ type ParseReady = {
 type ParseNeedsClarification = {
   status: "needs_clarification";
   params: null;
+  language: ShareLanguage;
   assumptions?: ParserAssumption[] | null;
   smart_levers?: SmartLever[] | null;
   question: string;
@@ -146,6 +148,7 @@ type SimulationResponseData = {
   survival_probability_12m: number | null;
   verdict: string | null;
   comment: string | null;
+  language: ShareLanguage;
   levers: SimulationLever[] | null;
 };
 
@@ -189,6 +192,8 @@ type ShareCardViewModel = {
   survivalValue: string;
   verdict: string;
   comment: string;
+  language: ShareLanguage;
+  labels: ReturnType<typeof getShareLabels>;
   baselineRunwayValue: string | null;
   baselineSurvivalValue: string | null;
   deltaRunwayMonths: number | null;
@@ -243,6 +248,7 @@ const PREFIX_CURRENCY_SYMBOLS = new Set(["$"]);
 const BASELINE_RESULT_STORAGE_KEY = "monterun_baseline_result";
 const LATEST_RESULT_STORAGE_KEY = "monterun_latest_result";
 const FINANCIAL_GUARDRAIL = "Simulation estimate, not financial advice.";
+const PARSE_CLIENT_TIMEOUT_MS = 12_000;
 const telegramBotUsername = process.env.NEXT_PUBLIC_TELEGRAM_BOT_USERNAME;
 
 const panelClass =
@@ -372,6 +378,10 @@ function normalizeOptionalTextField(value: unknown): string | null {
 
   const trimmed = value.trim();
   return trimmed.length > 0 ? trimmed : null;
+}
+
+function normalizeResultLanguage(value: unknown): ShareLanguage {
+  return value === "ru" ? "ru" : "en";
 }
 
 function normalizeOptionalLevers(value: unknown): SimulationLever[] | null {
@@ -998,20 +1008,11 @@ function buildSimulationUrlSearchParams({
   const searchParams = new URLSearchParams();
   const stress = getStressUrlState(params, baselineParams);
 
-  setSimulationParamSearchParams(searchParams, params);
-  searchParams.set("capital", formatUrlNumber(params.initial_capital));
-  searchParams.set("burn", formatUrlNumber(params.monthly_burn));
-  searchParams.set("income", formatUrlNumber(params.monthly_income));
-  searchParams.set("currency", currencySymbol);
   searchParams.set("mode", stress.mode);
   searchParams.set("stress_mode", stress.mode);
 
   if (stress.factors.length > 0) {
     searchParams.set("stress_factors", stress.factors.join(","));
-  }
-
-  if (baselineParams) {
-    setSimulationParamSearchParams(searchParams, baselineParams, "base_");
   }
 
   searchParams.set("runway", formatUrlNumber(Math.round(resultMetrics.runwayMonths * 10) / 10));
@@ -1085,20 +1086,39 @@ function CustomTooltip({ active, payload, currencySymbol }: CustomTooltipProps) 
 }
 
 async function postEnvelope<TResponse>(url: string, payload: Record<string, unknown>): Promise<ApiEnvelope<TResponse>> {
-  const response = await fetch(url, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-    },
-    cache: "no-store",
-    body: JSON.stringify(payload),
-  });
+  const controller = new AbortController();
+  const timeoutId = window.setTimeout(() => controller.abort(), PARSE_CLIENT_TIMEOUT_MS);
+  let response: Response;
 
-  if (!response.ok) {
-    throw new ApiRequestError(response.status);
+  try {
+    response = await fetch(url, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      cache: "no-store",
+      body: JSON.stringify(payload),
+      signal: controller.signal,
+    });
+  } catch (error) {
+    if (error instanceof DOMException && error.name === "AbortError") {
+      throw new ApiRequestError(504);
+    }
+
+    throw error;
+  } finally {
+    window.clearTimeout(timeoutId);
   }
 
-  const json = (await response.json()) as unknown;
+  const json = (await response.json().catch(() => null)) as unknown;
+  if (!response.ok) {
+    const apiMessage =
+      isRecord(json) && isRecord(json.error) && typeof json.error.message === "string"
+        ? json.error.message
+        : undefined;
+    throw new ApiRequestError(response.status, apiMessage);
+  }
+
   if (!isRecord(json) || !("meta" in json) || !("error" in json) || !("data" in json)) {
     throw new Error("Invalid API envelope");
   }
@@ -1130,6 +1150,7 @@ function normalizeParseResponseData(value: unknown): ParseResponseData {
     return {
       status: "needs_clarification",
       params: null,
+      language: normalizeResultLanguage(value.language),
       assumptions: normalizeOptionalAssumptions(value.assumptions),
       smart_levers: normalizeOptionalSmartLevers(value.smart_levers),
       question: trimmedQuestion,
@@ -1158,6 +1179,7 @@ function normalizeParseResponseData(value: unknown): ParseResponseData {
       n_simulations: normalizeIntField(params.n_simulations, "n_simulations", 1, 4000),
     },
     currency_symbol: normalizeCurrencySymbol(value.currency_symbol ?? params.currency_symbol),
+    language: normalizeResultLanguage(value.language),
     assumptions: normalizeOptionalAssumptions(value.assumptions),
     smart_levers: normalizeOptionalSmartLevers(value.smart_levers),
     question: null,
@@ -1195,6 +1217,7 @@ function normalizeSimulationResponseData(value: unknown): SimulationResponseData
     survival_probability_12m: normalizeOptionalNumberField(value.survival_probability_12m),
     verdict: normalizeOptionalTextField(value.verdict),
     comment: normalizeOptionalTextField(value.comment),
+    language: normalizeResultLanguage(value.language),
     levers: normalizeOptionalLevers(value.levers),
   };
 }
@@ -1400,6 +1423,7 @@ export default function SimulatorClient() {
     }
 
     const timestampIso = normalizeOptionalTextField(simulationMeta?.generated_at);
+    const language = simulationData?.language ?? "en";
     const normalizedVerdict = clampText(verdict, 92);
     const normalizedComment = clampText(comment, 112);
     if (!normalizedVerdict || !normalizedComment) {
@@ -1427,6 +1451,8 @@ export default function SimulatorClient() {
       survivalValue: formatShareProbability(resultMetrics.survivalPercent),
       verdict: normalizedVerdict,
       comment: normalizedComment,
+      language,
+      labels: getShareLabels(language),
       baselineRunwayValue: hasDelta && baselineResult ? formatRunwayMonths(baselineResult.runwayMonths) : null,
       baselineSurvivalValue: hasDelta && baselineResult ? formatShareProbability(baselineResult.survivalPercent) : null,
       deltaRunwayMonths: hasDelta ? rawDeltaRunwayMonths : null,
@@ -1442,6 +1468,7 @@ export default function SimulatorClient() {
     resultFlow,
     resultMetrics,
     simulationData?.comment,
+    simulationData?.language,
     simulationData?.verdict,
     simulationMeta?.generated_at,
     simulationParams?.months,
@@ -1471,14 +1498,7 @@ export default function SimulatorClient() {
       runway: resultMetrics.runwayMonths,
       survival: resultMetrics.survivalPercent,
       verdict,
-      capital: simulationParams.initial_capital,
-      income: simulationParams.monthly_income,
-      burn: simulationParams.monthly_burn,
-      incomeDelayMonths: simulationParams.income_delay_months,
-      capitalShock: simulationParams.capital_shock,
-      burnMultiplier: simulationParams.burn_multiplier,
-      months: simulationParams.months,
-      nSimulations: simulationParams.n_simulations,
+      language: shareCard.language,
       baselineRunway:
         shareCard.hasDelta && shareCard.baselineRunwayValue !== null
           ? Number.parseFloat(shareCard.baselineRunwayValue)
@@ -1842,15 +1862,22 @@ export default function SimulatorClient() {
 
       const normalizedSimulationData = normalizeSimulationResponseData(parseEnvelope.data);
       setResultFlow("parse");
+      const resultLanguage = normalizedParseData.language;
       const parserReadyMessage = createMessage(
         "ai",
-        `PLAN CAPTURED | CAPITAL ${normalizedParseData.params.initial_capital} | BURN ${normalizedParseData.params.monthly_burn} | INCOME ${normalizedParseData.params.monthly_income} | DELAY ${normalizedParseData.params.income_delay_months}M`,
+        resultLanguage === "ru"
+          ? `ПЛАН ПРИНЯТ | КАПИТАЛ ${normalizedParseData.params.initial_capital} | РАСХОД ${normalizedParseData.params.monthly_burn} | ДОХОД ${normalizedParseData.params.monthly_income} | ЗАДЕРЖКА ${normalizedParseData.params.income_delay_months}М`
+          : `PLAN CAPTURED | CAPITAL ${normalizedParseData.params.initial_capital} | BURN ${normalizedParseData.params.monthly_burn} | INCOME ${normalizedParseData.params.monthly_income} | DELAY ${normalizedParseData.params.income_delay_months}M`,
       );
       const simulationCompleteMessage = createMessage(
         "ai",
-        `SIMULATION COMPLETE | SURVIVAL ${normalizeProbabilityPercent(
-          normalizedSimulationData.survival_probability_12m ?? normalizedSimulationData.survival_probability,
-        ).toFixed(1)}%`,
+        resultLanguage === "ru"
+          ? `СИМУЛЯЦИЯ ГОТОВА | ВЫЖИВАЕМОСТЬ ${normalizeProbabilityPercent(
+              normalizedSimulationData.survival_probability_12m ?? normalizedSimulationData.survival_probability,
+            ).toFixed(1)}%`
+          : `SIMULATION COMPLETE | SURVIVAL ${normalizeProbabilityPercent(
+              normalizedSimulationData.survival_probability_12m ?? normalizedSimulationData.survival_probability,
+            ).toFixed(1)}%`,
       );
 
       setViewState((current) => ({
@@ -1888,9 +1915,18 @@ export default function SimulatorClient() {
           Link copied
         </div>
       ) : null}
+      {copyFeedback === "error" ? (
+        <div
+          aria-live="polite"
+          className="fixed bottom-5 left-1/2 z-50 -translate-x-1/2 rounded-full border border-red-200/24 bg-[rgba(20,6,6,0.92)] px-5 py-3 text-sm font-medium text-red-100 shadow-[0_18px_70px_rgba(0,0,0,0.42)] backdrop-blur-xl"
+          role="status"
+        >
+          Share link unavailable
+        </div>
+      ) : null}
 
-      <div className="mx-auto flex min-h-screen max-w-7xl flex-col gap-6 px-4 py-6 sm:px-6 lg:px-8">
-        <header className={`${panelClass} relative overflow-hidden px-5 py-5 sm:px-6 sm:py-6`}>
+      <div className="mx-auto flex min-h-screen max-w-7xl flex-col gap-4 px-4 py-4 sm:gap-6 sm:px-6 sm:py-6 lg:px-8">
+        <header className={`${panelClass} order-2 relative overflow-hidden px-5 py-5 sm:px-6 sm:py-6 xl:order-1`}>
           <div className="absolute inset-0 bg-[radial-gradient(circle_at_top,rgba(255,255,255,0.08),transparent_38%),linear-gradient(180deg,rgba(255,255,255,0.04),rgba(255,255,255,0.01))]" />
 
           <div className="relative flex flex-col gap-6 xl:flex-row xl:items-end xl:justify-between">
@@ -1933,13 +1969,15 @@ export default function SimulatorClient() {
           </div>
         </header>
 
-        <div className="grid gap-6 xl:grid-cols-[360px_minmax(0,1fr)]">
-          <section className="space-y-6">
+        <div className="order-1 grid gap-6 xl:order-2 xl:grid-cols-[360px_minmax(0,1fr)]">
+          <section className="order-1 space-y-6 xl:order-none xl:col-start-1">
             <div className={`${panelClass} px-5 py-5 sm:px-6`}>
               <div className="mb-5 flex items-center justify-between">
                 <div>
                   <div className="text-[11px] uppercase tracking-[0.22em] text-white/46">{composerLabel}</div>
-                  <div className="mt-2 text-lg font-medium text-white">Scenario composer</div>
+                  <label className="mt-2 block text-lg font-medium text-white" htmlFor="scenario-input">
+                    Describe your financial scenario
+                  </label>
                 </div>
                 {readyParams ? (
                   <div className="rounded-full border border-white/10 bg-white/5 px-3 py-1.5 font-mono text-[11px] text-white/60 tabular-nums">
@@ -1955,13 +1993,15 @@ export default function SimulatorClient() {
                   </div>
                 ) : null}
                 <textarea
-                  className="h-48 w-full rounded-3xl border border-white/10 bg-[linear-gradient(180deg,rgba(255,255,255,0.06),rgba(255,255,255,0.03))] px-4 py-4 text-[15px] text-white outline-none placeholder:text-white/34 disabled:opacity-60"
+                  aria-describedby="scenario-input-help"
+                  className="h-36 min-h-36 w-full rounded-3xl border border-white/10 bg-[linear-gradient(180deg,rgba(255,255,255,0.06),rgba(255,255,255,0.03))] px-4 py-4 text-[15px] text-white outline-none placeholder:text-white/34 disabled:opacity-60 sm:h-48"
                   disabled={isBusy}
+                  id="scenario-input"
                   onChange={(event) => setDraft(event.target.value)}
                   placeholder={
                     status === "clarifying"
                       ? "Enter the answer to the clarification question..."
-                      : "Example: cash $80,000, monthly burn $9,500, income $7,000, income starts in 3 months, horizon 18 months."
+                      : "I have $5,000, no job, $2,000/mo expenses, starting freelance work..."
                   }
                   spellCheck={false}
                   value={draft}
@@ -1974,7 +2014,7 @@ export default function SimulatorClient() {
                   >
                     {submitLabel}
                   </button>
-                  <div className="text-[13px] text-white/48">
+                  <div className="text-[13px] text-white/48" id="scenario-input-help">
                     Describe the plan. MonteRun turns it into survival math.
                   </div>
                 </div>
@@ -1987,11 +2027,13 @@ export default function SimulatorClient() {
                   <div className="text-[11px] font-medium uppercase tracking-[0.2em] text-red-200/82">
                     Scenario blocked
                   </div>
-                  <div className="mt-2 text-sm leading-6 text-red-50/90">{errorMessage}</div>
-                </div>
-              ) : null}
+                <div className="mt-2 text-sm leading-6 text-red-50/90">{errorMessage}</div>
+              </div>
+            ) : null}
             </div>
+          </section>
 
+          <section className="order-3 space-y-6 xl:order-none xl:col-start-1 xl:row-start-2">
             <WhatIfControls
               currencySymbol={currencySymbol}
               disabled={status !== "simulated"}
@@ -2029,7 +2071,7 @@ export default function SimulatorClient() {
             </div>
           </section>
 
-          <section className="space-y-6">
+          <section className="order-2 space-y-6 xl:order-none xl:col-start-2 xl:row-span-2 xl:row-start-1">
             <div className={`${panelClass} overflow-hidden`}>
               <div className="border-b border-white/10 px-5 py-4 sm:px-6">
                 <div className="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
@@ -2039,20 +2081,20 @@ export default function SimulatorClient() {
                   </div>
 
                   {chartSummary ? (
-                    <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
+                    <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
                       <div className="rounded-3xl border border-white/10 bg-white/5 px-4 py-3">
                         <div className="text-[11px] uppercase tracking-[0.18em] text-white/46">Survival</div>
                         <div className="mt-2 font-mono text-base text-white tabular-nums">
                           {chartSummary.survivalPct.toFixed(1)}%
                         </div>
                       </div>
-                      <div className="rounded-3xl border border-white/10 bg-white/5 px-4 py-3">
+                      <div className="hidden rounded-3xl border border-white/10 bg-white/5 px-4 py-3 sm:block">
                         <div className="text-[11px] uppercase tracking-[0.18em] text-white/46">Bankruptcy</div>
                         <div className="mt-2 font-mono text-base text-white tabular-nums">
                           {chartSummary.bankruptcyPct.toFixed(1)}%
                         </div>
                       </div>
-                      <div className="rounded-3xl border border-white/10 bg-white/5 px-4 py-3">
+                      <div className="hidden rounded-3xl border border-white/10 bg-white/5 px-4 py-3 sm:block">
                         <div className="text-[11px] uppercase tracking-[0.18em] text-white/46">Median End</div>
                         <div className="mt-2 font-mono text-base text-white tabular-nums">
                           {formatCurrency(chartSummary.medianEndingBalance, currencySymbol)}
@@ -2075,35 +2117,36 @@ export default function SimulatorClient() {
                         <div className="rounded-full border border-white/10 bg-white/5 px-3 py-1.5 font-mono text-[11px] text-white/62 tabular-nums">
                           {chartSummary.horizon} months
                         </div>
-                        <div className="rounded-full border border-white/10 bg-white/5 px-3 py-1.5 font-mono text-[11px] text-white/62 tabular-nums">
+                        <div className="hidden rounded-full border border-white/10 bg-white/5 px-3 py-1.5 font-mono text-[11px] text-white/62 tabular-nums sm:block">
                           P90 {formatCurrency(chartSummary.optimisticEndingBalance, currencySymbol)}
                         </div>
-                        <div className="rounded-full border border-white/10 bg-white/5 px-3 py-1.5 font-mono text-[11px] text-white/62 tabular-nums">
+                        <div className="hidden rounded-full border border-white/10 bg-white/5 px-3 py-1.5 font-mono text-[11px] text-white/62 tabular-nums sm:block">
                           P10 {formatCurrency(chartSummary.pessimisticEndingBalance, currencySymbol)}
                         </div>
                       </div>
                     </div>
 
-                    <div className="relative h-[320px] min-h-[320px] min-w-0 overflow-hidden rounded-[28px] border border-white/10 bg-[radial-gradient(circle_at_top_left,rgba(16,185,129,0.10),transparent_32%),linear-gradient(180deg,rgba(255,255,255,0.04),rgba(255,255,255,0.01))] p-2 sm:h-[360px] sm:min-h-[360px] lg:h-[420px] lg:min-h-[420px]">
-                      {whatIfSimulation.isPending ? (
-                        <div
-                          aria-live="polite"
-                          className="absolute inset-0 z-10 grid place-items-center bg-black/36 backdrop-blur-[2px]"
-                        >
-                          <div className="inline-flex items-center gap-3 rounded-full border border-emerald-200/20 bg-black/52 px-4 py-2 font-mono text-[11px] uppercase tracking-[0.16em] text-emerald-100 shadow-[0_18px_60px_rgba(0,0,0,0.32)]">
-                            <span className="h-3 w-3 animate-spin rounded-full border border-emerald-100/80 border-t-transparent" />
-                            Recalculating
+                    <div className="-mx-2 overflow-x-auto px-2 pb-2 sm:mx-0 sm:overflow-visible sm:px-0 sm:pb-0">
+                      <div className="relative h-[390px] min-h-[390px] min-w-[560px] overflow-hidden rounded-[28px] border border-white/10 bg-[radial-gradient(circle_at_top_left,rgba(16,185,129,0.10),transparent_32%),linear-gradient(180deg,rgba(255,255,255,0.04),rgba(255,255,255,0.01))] p-2 sm:h-[380px] sm:min-h-[380px] sm:min-w-0 lg:h-[430px] lg:min-h-[430px]">
+                        {whatIfSimulation.isPending ? (
+                          <div
+                            aria-live="polite"
+                            className="absolute inset-0 z-10 grid place-items-center bg-black/36 backdrop-blur-[2px]"
+                          >
+                            <div className="inline-flex items-center gap-3 rounded-full border border-emerald-200/20 bg-black/52 px-4 py-2 font-mono text-[11px] uppercase tracking-[0.16em] text-emerald-100 shadow-[0_18px_60px_rgba(0,0,0,0.32)]">
+                              <span className="h-3 w-3 animate-spin rounded-full border border-emerald-100/80 border-t-transparent" />
+                              Recalculating
+                            </div>
                           </div>
-                        </div>
-                      ) : null}
-                      <ResponsiveContainer
-                        width="100%"
-                        height="100%"
-                        minWidth={240}
-                        minHeight={304}
-                        initialDimension={{ width: 720, height: 304 }}
-                      >
-                        <ComposedChart data={chartData} margin={{ top: 12, right: 18, bottom: 8, left: 4 }}>
+                        ) : null}
+                        <ResponsiveContainer
+                          width="100%"
+                          height="100%"
+                          minWidth={520}
+                          minHeight={360}
+                          initialDimension={{ width: 620, height: 360 }}
+                        >
+                          <ComposedChart data={chartData} margin={{ top: 14, right: 24, bottom: 12, left: 8 }}>
                           <defs>
                             <linearGradient id="chartBand" x1="0" x2="0" y1="0" y2="1">
                               <stop offset="0%" stopColor="rgba(16,185,129,0.22)" />
@@ -2198,12 +2241,13 @@ export default function SimulatorClient() {
                             strokeWidth={2}
                             type="monotone"
                           />
-                        </ComposedChart>
-                      </ResponsiveContainer>
+                          </ComposedChart>
+                        </ResponsiveContainer>
+                      </div>
                     </div>
 
                     {shareCard ? (
-                      <article className="share-card" aria-label="MonteRun premium share card">
+                      <article className="share-card" aria-label={shareCard.labels.cardAria}>
                         <header className="share-card__header">
                           <div className="share-card__brand">
                             <span aria-hidden="true" className="share-card__brand-mark" />
@@ -2218,19 +2262,21 @@ export default function SimulatorClient() {
                           ) : null}
                         </header>
 
-                        <section className="share-card__hero" aria-label="Runway and survival">
+                        <section className="share-card__hero" aria-label={shareCard.labels.heroAria}>
                           <div className="share-card__runway-block">
-                            <div className="share-card__eyebrow">Simulation Result</div>
+                            <div className="share-card__eyebrow">{shareCard.labels.simulationResult}</div>
                             <div className="share-card__runway">
                               <div className="share-card__runway-value">{shareCard.runwayValue}</div>
-                              <div className="share-card__runway-unit">MONTHS</div>
+                              <div className="share-card__runway-unit">{shareCard.labels.monthsUnit}</div>
                               {shareCard.hasDelta && shareCard.deltaRunwayMonths !== null ? (
                                 <div
                                   className={`share-card__delta-pill ${
                                     shareCard.isImprovement ? "share-card__delta-pill--up" : "share-card__delta-pill--down"
                                   }`}
                                 >
-                                  <span aria-hidden="true">{shareCard.isImprovement ? "up" : "down"}</span>
+                                  <span aria-hidden="true">
+                                    {shareCard.isImprovement ? shareCard.labels.up : shareCard.labels.down}
+                                  </span>
                                   <span>
                                     {shareCard.deltaRunwayMonths > 0 ? "+" : ""}
                                     {formatRunwayMonths(shareCard.deltaRunwayMonths)}
@@ -2239,7 +2285,10 @@ export default function SimulatorClient() {
                               ) : null}
                             </div>
                             {shareCard.hasDelta && shareCard.baselineRunwayValue ? (
-                              <p className="share-card__baseline-note">Was {shareCard.baselineRunwayValue} months</p>
+                              <p className="share-card__baseline-note">
+                                {shareCard.labels.baselinePrefix} {shareCard.baselineRunwayValue}{" "}
+                                {shareCard.labels.monthsUnit.toLowerCase()}
+                              </p>
                             ) : null}
                             <p className="share-card__hero-note">{shareCard.comment}</p>
                           </div>
@@ -2265,13 +2314,13 @@ export default function SimulatorClient() {
                                 ) : null}
                                 <span>{shareCard.survivalValue}</span>
                               </div>
-                              <div className="share-card__metric-label">Survival Probability 12m</div>
+                              <div className="share-card__metric-label">{shareCard.labels.survivalMetric}</div>
                             </div>
                           </div>
                         </section>
 
-                        <section className="share-card__verdict" aria-label="Verdict block">
-                          <div className="share-card__section-kicker">Verdict</div>
+                        <section className="share-card__verdict" aria-label={shareCard.labels.verdictAria}>
+                          <div className="share-card__section-kicker">{shareCard.labels.verdict}</div>
                           <p className="share-card__verdict-text">{shareCard.verdict}</p>
                         </section>
 
@@ -2282,17 +2331,17 @@ export default function SimulatorClient() {
                             onClick={handleCopyShareLink}
                             type="button"
                           >
-                            [ Share Reality Check ]
+                            {shareCard.labels.shareButton}
                           </button>
                           {telegramLink ? (
                             <a
-                              aria-label={`Track survival in Telegram with token ${telegramLink.startToken}`}
+                              aria-label={`${shareCard.labels.telegramCta} ${telegramLink.startToken}`}
                               className="share-card__reality-button share-card__reality-button--telegram"
                               href={telegramLink.href}
                               rel="noreferrer"
                               target="_blank"
                             >
-                              Track survival in Telegram
+                              {shareCard.labels.telegramCta}
                             </a>
                           ) : null}
                         </div>

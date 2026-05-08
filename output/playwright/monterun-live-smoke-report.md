@@ -1,6 +1,6 @@
 # MonteRun Live Smoke Report
 
-Target: `https://forkverse-8inw.vercel.app/` by default, or `MONTERUN_URL` when set.
+Target: `https://monterun.vercel.app/` by default, or `MONTERUN_URL` when set.
 Updated: 2026-05-01
 
 ## Scenario
@@ -22,7 +22,7 @@ output/playwright/monterun-live-smoke.spec.ts
 Core path covered:
 
 1. Open the target app.
-2. Fill the English `Example: cash...` scenario composer.
+2. Fill the `Describe your financial scenario` scenario composer.
 3. Click `Run simulation`.
 4. Wait for `/api/parse` with a launch-hardening timeout.
 5. Verify `SIMULATED`, `PLAN CAPTURED`, simulation completion, `1000 sims`, and share CTA.
@@ -56,6 +56,11 @@ Plain `next dev` serves the UI but not the Python `/api/parse` function, so use 
 The test does not fake passing when the live environment is unavailable; target failures surface as normal Playwright failures.
 
 ## Latest Verification
+
+2026-05-08:
+
+- `npm run test:live:monterun` against the renamed default target failed before app load because `https://monterun.vercel.app/` returned Vercel `DEPLOYMENT_NOT_FOUND`.
+- Local `vercel dev --local --listen 127.0.0.1:3001 --yes` also failed during adapter boot with a Vercel CLI runtime error, so the full live smoke needs a reachable `MONTERUN_URL`.
 
 2026-05-01:
 

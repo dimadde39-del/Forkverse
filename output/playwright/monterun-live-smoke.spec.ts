@@ -1,6 +1,6 @@
 import { expect, test } from '@playwright/test';
 
-const BASE_URL = process.env.MONTERUN_URL ?? 'https://forkverse-8inw.vercel.app/';
+const BASE_URL = process.env.MONTERUN_URL ?? 'https://monterun.vercel.app/';
 const SCENARIO =
   'cash $8,000,000, monthly burn $950,000, monthly income $700,000, income starts in 3 months, horizon 18 months.';
 
@@ -30,7 +30,7 @@ test('MonteRun live happy path, what-if, and share flow', async ({ page }) => {
     }),
   ).toBeVisible({ timeout: PAGE_LOAD_TIMEOUT_MS });
 
-  const scenarioInput = page.getByRole('textbox', { name: /Example: cash/i });
+  const scenarioInput = page.getByRole('textbox', { name: /Describe your financial scenario/i });
   await scenarioInput.click();
   await scenarioInput.pressSequentially(SCENARIO);
   await expect(scenarioInput).toHaveValue(SCENARIO);

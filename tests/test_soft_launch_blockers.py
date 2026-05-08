@@ -50,6 +50,43 @@ class ParseGuardrailTests(unittest.TestCase):
             parse._enforce_soft_launch_gate({parse.PARSE_GATE_HEADER: "launch-secret"})
             parse._enforce_soft_launch_gate({"authorization": "Bearer launch-secret"})
 
+    def test_parse_handler_does_not_call_second_llm_roast_stage(self) -> None:
+        source = read_project_file("api/parse.py")
+        do_post_source = source[source.index("    def do_POST(self) -> None:") : source.index("    def do_GET(self) -> None:")]
+
+        self.assertIn("_build_deterministic_roast_payload", do_post_source)
+        self.assertNotIn("_call_roast_stage", do_post_source)
+
+    def test_explicit_unsupported_currency_clarifies_before_simulation(self) -> None:
+        normalized = parse._normalize_extraction_payload(
+            {
+                "status": "ready",
+                "params": {
+                    "cash": 5000,
+                    "monthly_income": 2000,
+                    "fixed_expenses": 1000,
+                    "flexible_expenses": 500,
+                    "income_delay_months": 0,
+                    "currency_symbol": "$",
+                },
+                "question": None,
+                "comment": "Cold math.",
+                "smart_levers": [
+                    {"title": "Cut subscriptions", "effort": "Low", "math_patch": {"burn": -100}},
+                    {"title": "Add one client", "effort": "Medium", "math_patch": {"income": 500}},
+                    {"title": "Delay spend", "effort": "High", "math_patch": {"capital_shock": -500}},
+                ],
+            },
+            parser_input="cash 5000 руб, income 2000 руб, expenses 1500 руб",
+        )
+
+        self.assertEqual(normalized["status"], "needs_clarification")
+        self.assertEqual(normalized["missing_fields"], ["usd_converted_amounts"])
+
+    def test_unsupported_currency_detection_does_not_match_entrepreneur(self) -> None:
+        self.assertFalse(parse._has_unsupported_currency("I am an entrepreneur with $50k cash and $3k burn."))
+        self.assertTrue(parse._has_unsupported_currency("cash 5000 eur, income 2000 eur, burn 1500 eur"))
+
 
 class SimulationGuardrailTests(unittest.TestCase):
     def test_math_core_rejects_months_above_server_cap(self) -> None:
@@ -98,6 +135,31 @@ class ShareOgGuardrailTests(unittest.TestCase):
         self.assertIn('setMetric(params, "baselineSurvival"', share_card)
         self.assertIn("const ogImagePath = getOgImagePath(shareCard)", share_page)
         self.assertIn("const title = `${shareCard.verdict} | MonteRun`", share_page)
+
+    def test_share_urls_do_not_serialize_raw_financial_inputs(self) -> None:
+        share_card = read_project_file("app/lib/share-card.ts")
+        simulator = read_project_file("components/SimulatorClient.tsx")
+
+        self.assertIn("hasShareResultParams", share_card)
+        self.assertNotIn('setMetric(params, "capital"', share_card)
+        self.assertNotIn('setMetric(params, "income"', share_card)
+        self.assertNotIn('setMetric(params, "burn"', share_card)
+        self.assertNotIn("capital: simulationParams.initial_capital", simulator)
+        self.assertNotIn("income: simulationParams.monthly_income", simulator)
+        self.assertNotIn("burn: simulationParams.monthly_burn", simulator)
+
+    def test_missing_share_url_renders_generic_state_instead_of_fake_metrics(self) -> None:
+        share_page = read_project_file("app/share/page.tsx")
+        og_route = read_project_file("app/api/og/route.tsx")
+        has_result_params_source = og_route[
+            og_route.index("function hasResultParams") : og_route.index("export async function GET")
+        ]
+
+        self.assertIn("No shared result loaded", share_page)
+        self.assertIn("No shared result loaded", og_route)
+        self.assertIn("readOptionalRunway", has_result_params_source)
+        self.assertIn("readOptionalSurvival", has_result_params_source)
+        self.assertNotIn('searchParams.get("runway") &&', has_result_params_source)
 
     def test_financial_guardrail_is_visible_on_result_share_and_og_surfaces(self) -> None:
         guardrail = "Simulation estimate, not financial advice."

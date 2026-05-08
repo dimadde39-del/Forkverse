@@ -1,16 +1,17 @@
 import { ImageResponse } from "next/og";
 
+import { getShareLabels, type ShareLanguage } from "@/app/lib/share-card";
+
 export const runtime = "edge";
 
 const FALLBACKS = {
-  capital: 50_000,
-  income: 0,
-  burn: 10_000,
   survival: 0,
   runway: 0,
 };
 const OG_VERDICT_MAX_CHARS = 72;
 const FINANCIAL_GUARDRAIL = "Simulation estimate, not financial advice.";
+const URL_SNAPSHOT_NOTE = "URL snapshot, not a verified record.";
+const URL_SNAPSHOT_NOTE_RU = "\u0421\u043d\u0438\u043c\u043e\u043a \u0438\u0437 URL, \u043d\u0435 \u043f\u0440\u043e\u0432\u0435\u0440\u0435\u043d\u043d\u0430\u044f \u0437\u0430\u043f\u0438\u0441\u044c.";
 
 function readFiniteNumber(value: string | null, fallback: number) {
   if (!value) {
@@ -43,6 +44,10 @@ function readSurvival(value: string | null) {
   const asPercent = parsed > 0 && parsed <= 1 ? parsed * 100 : parsed;
 
   return Math.round(clamp(asPercent, 0, 100));
+}
+
+function readLanguage(value: string | null): ShareLanguage {
+  return value === "ru" ? "ru" : "en";
 }
 
 function readOptionalSurvival(value: string | null) {
@@ -91,7 +96,19 @@ function formatMonths(months: number) {
   return Number.isInteger(rounded) ? String(rounded) : rounded.toFixed(1);
 }
 
-function getDeltaVerdict(baselineSurvival: number, deltaRunwayMonths: number) {
+function getDeltaVerdict(baselineSurvival: number, deltaRunwayMonths: number, language: ShareLanguage) {
+  if (language === "ru") {
+    if (deltaRunwayMonths > 0) {
+      return `\u0411\u044b\u043b\u043e ${baselineSurvival}%. \u0417\u0430\u043f\u0430\u0441 \u0432\u044b\u0440\u043e\u0441 \u043d\u0430 ${formatMonths(deltaRunwayMonths)} \u043c\u0435\u0441.`;
+    }
+
+    if (deltaRunwayMonths < 0) {
+      return `\u0411\u044b\u043b\u043e ${baselineSurvival}%. \u0417\u0430\u043f\u0430\u0441 \u0443\u043f\u0430\u043b \u043d\u0430 ${formatMonths(Math.abs(deltaRunwayMonths))} \u043c\u0435\u0441.`;
+    }
+
+    return `\u0411\u044b\u043b\u043e ${baselineSurvival}%. \u0417\u0430\u043f\u0430\u0441 \u043d\u0435 \u0438\u0437\u043c\u0435\u043d\u0438\u043b\u0441\u044f.`;
+  }
+
   if (deltaRunwayMonths > 0) {
     return `Was ${baselineSurvival}%. Gained ${formatMonths(deltaRunwayMonths)} months.`;
   }
@@ -124,23 +141,97 @@ function sanitizeText(value: string | null, fallback: string, limit: number) {
   return normalized ? truncate(normalized, limit) : fallback;
 }
 
+function hasResultParams(searchParams: URLSearchParams) {
+  const runway = readOptionalRunway(searchParams.get("runway"));
+  const survival = readOptionalSurvival(searchParams.get("survival"));
+  const verdict = sanitizeText(searchParams.get("verdict"), "", OG_VERDICT_MAX_CHARS);
+
+  return runway !== null && survival !== null && verdict.length > 0;
+}
+
 export async function GET(request: Request) {
   const { searchParams } = new URL(request.url);
-  const capital = readMoney(searchParams.get("capital"), FALLBACKS.capital);
-  const income = readMoney(searchParams.get("income"), FALLBACKS.income);
-  const burn = readMoney(searchParams.get("burn"), FALLBACKS.burn);
+  const language = readLanguage(searchParams.get("language") ?? searchParams.get("lang"));
+  const labels = getShareLabels(language);
+
+  if (!hasResultParams(searchParams)) {
+    return new ImageResponse(
+      (
+        <div
+          style={{
+            width: "1200px",
+            height: "630px",
+            display: "flex",
+            flexDirection: "column",
+            justifyContent: "space-between",
+            backgroundColor: "#05070a",
+            color: "#f4f8fb",
+            fontFamily:
+              'Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif',
+            padding: "58px 70px 54px",
+          }}
+        >
+          <div style={{ display: "flex", alignItems: "center", gap: 16, fontSize: 22, fontWeight: 700 }}>
+            <div
+              style={{
+                width: 18,
+                height: 18,
+                borderRadius: 18,
+                backgroundColor: "#70f6ff",
+                boxShadow: "0 0 34px rgba(112, 246, 255, 0.8)",
+              }}
+            />
+            <div style={{ display: "flex", letterSpacing: "0.12em", textTransform: "uppercase" }}>MonteRun</div>
+          </div>
+          <div style={{ display: "flex", flexDirection: "column", gap: 22 }}>
+            <div style={{ display: "flex", color: "#70f6ff", fontSize: 54, fontWeight: 800 }}>
+              No shared result loaded
+            </div>
+            <div style={{ display: "flex", width: "780px", color: "rgba(244,248,251,0.68)", fontSize: 34 }}>
+              Run a scenario to create a MonteRun runway snapshot.
+            </div>
+          </div>
+          <div
+            style={{
+              display: "flex",
+              justifyContent: "space-between",
+              borderTop: "1px solid rgba(244, 248, 251, 0.14)",
+              paddingTop: 28,
+              color: "rgba(244, 248, 251, 0.58)",
+              fontSize: 18,
+            }}
+          >
+            <div style={{ display: "flex" }}>{FINANCIAL_GUARDRAIL}</div>
+            <div style={{ display: "flex", color: "#70f6ff", fontWeight: 700, letterSpacing: "0.18em" }}>
+              Math decides
+            </div>
+          </div>
+        </div>
+      ),
+      {
+        width: 1200,
+        height: 630,
+        headers: {
+          "Cache-Control": "public, s-maxage=86400, stale-while-revalidate=604800",
+        },
+      },
+    );
+  }
+
   const survival = readSurvival(searchParams.get("survival"));
   const baselineRunway = readOptionalRunway(searchParams.get("baselineRunway"));
   const baselineSurvival = readOptionalSurvival(searchParams.get("baselineSurvival"));
-  const runwayMonths = readRunway(searchParams.get("runway"), deriveRunwayMonths(capital, income, burn));
+  const runwayMonths = readRunway(searchParams.get("runway"), FALLBACKS.runway);
   const runwayLabel = formatRunway(runwayMonths);
   const hasDelta = baselineRunway !== null && baselineSurvival !== null;
   const deltaRunwayMonths = hasDelta ? runwayMonths - baselineRunway : 0;
   const isImprovement = deltaRunwayMonths >= 0;
   const accentColor = hasDelta ? (isImprovement ? "#70f6ff" : "#ff8b5f") : "#70f6ff";
   const fallbackVerdict = hasDelta
-    ? getDeltaVerdict(baselineSurvival, deltaRunwayMonths)
-    : `My startup dies in ${runwayLabel} months. Beat that.`;
+    ? getDeltaVerdict(baselineSurvival, deltaRunwayMonths, language)
+    : language === "ru"
+      ? `\u041c\u043e\u0439 \u0431\u0438\u0437\u043d\u0435\u0441 \u0443\u043c\u0438\u0440\u0430\u0435\u0442 \u0447\u0435\u0440\u0435\u0437 ${runwayLabel} \u043c\u0435\u0441. \u041f\u0440\u043e\u0432\u0435\u0440\u044c \u0441\u0432\u043e\u0439.`
+      : `My startup dies in ${runwayLabel} months. Beat that.`;
   const verdict = sanitizeText(
     searchParams.get("verdict"),
     fallbackVerdict,
@@ -213,7 +304,7 @@ export async function GET(request: Request) {
                 textTransform: "uppercase",
               }}
             >
-              Deterministic runway card
+              {labels.ogCardLabel}
             </div>
           </div>
 
@@ -287,7 +378,7 @@ export async function GET(request: Request) {
                   textTransform: "uppercase",
                 }}
               >
-                {hasDelta ? "Survival 12m" : "Survival"}
+                {hasDelta ? labels.survival12m : labels.survivalMetric.replace(" Probability 12m", "")}
               </div>
             </div>
 
@@ -325,11 +416,15 @@ export async function GET(request: Request) {
                 letterSpacing: "0.04em",
               }}
             >
-              <div style={{ display: "flex" }}>Capital ${Math.round(capital).toLocaleString("en-US")}</div>
+              <div style={{ display: "flex" }}>
+                {labels.runway} {runwayLabel}
+              </div>
               <div style={{ display: "flex", color: "rgba(244, 248, 251, 0.28)" }}>/</div>
-              <div style={{ display: "flex" }}>Burn ${Math.round(burn).toLocaleString("en-US")}/mo</div>
+              <div style={{ display: "flex" }}>
+                {labels.survival12m} {survival}%
+              </div>
               <div style={{ display: "flex", color: "rgba(244, 248, 251, 0.28)" }}>/</div>
-              <div style={{ display: "flex" }}>Income ${Math.round(income).toLocaleString("en-US")}/mo</div>
+              <div style={{ display: "flex" }}>{language === "en" ? URL_SNAPSHOT_NOTE : URL_SNAPSHOT_NOTE_RU}</div>
             </div>
 
             <div
@@ -342,7 +437,7 @@ export async function GET(request: Request) {
                 textTransform: "uppercase",
               }}
             >
-              Math decides
+              {labels.mathDecides}
             </div>
             <div
               style={{
@@ -352,7 +447,7 @@ export async function GET(request: Request) {
                 letterSpacing: "0.02em",
               }}
             >
-              {FINANCIAL_GUARDRAIL}
+              {language === "en" ? FINANCIAL_GUARDRAIL : labels.guardrail}
             </div>
           </div>
         </div>
