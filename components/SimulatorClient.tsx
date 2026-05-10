@@ -14,8 +14,9 @@ import {
   YAxis,
 } from "recharts";
 
-import { getOgImagePath, getShareLabels, getSharePagePath, type ShareLanguage } from "@/app/lib/share-card";
+import { getShareLabels, type ShareLanguage } from "@/app/lib/share-card";
 
+import DeltaShareCard from "./DeltaShareCard";
 import WhatIfControls from "./WhatIfControls";
 import { type DebouncedSimulationError, useDebouncedSimulation } from "./useDebouncedSimulation";
 
@@ -202,11 +203,6 @@ type ShareCardViewModel = {
   hasDelta: boolean;
 };
 
-type ShareLinkModel = {
-  ogImagePath: string;
-  sharePagePath: string;
-};
-
 type TelegramLinkModel = {
   href: string;
   startToken: string;
@@ -245,6 +241,7 @@ const prefixMoneyFormatter = new Intl.NumberFormat("en-US", {
 });
 
 const PREFIX_CURRENCY_SYMBOLS = new Set(["$"]);
+const BASELINE_MONTHS_STORAGE_KEY = "monterun_baseline_months";
 const BASELINE_RESULT_STORAGE_KEY = "monterun_baseline_result";
 const LATEST_RESULT_STORAGE_KEY = "monterun_latest_result";
 const FINANCIAL_GUARDRAIL = "Simulation estimate, not financial advice.";
@@ -459,6 +456,52 @@ function writeStoredResult(storageKey: string, result: BaselineResult): void {
     window.localStorage.setItem(storageKey, JSON.stringify(result));
   } catch (error) {
     console.warn(`[SimClient] Unable to write ${storageKey}:`, error);
+  }
+}
+
+function normalizeBaselineMonths(value: string | null): number | null {
+  if (value === null) {
+    return null;
+  }
+
+  const trimmedValue = value.trim();
+  if (!trimmedValue) {
+    return null;
+  }
+
+  const parsedValue = Number(trimmedValue);
+  return isFiniteNumber(parsedValue) && parsedValue >= 0 ? parsedValue : null;
+}
+
+function readStoredBaselineMonths(): number | null {
+  if (typeof window === "undefined") {
+    return null;
+  }
+
+  try {
+    return normalizeBaselineMonths(window.localStorage.getItem(BASELINE_MONTHS_STORAGE_KEY));
+  } catch (error) {
+    console.warn(`[SimClient] Unable to read ${BASELINE_MONTHS_STORAGE_KEY}:`, error);
+    return null;
+  }
+}
+
+function writeStoredBaselineMonthsOnce(months: number): number | null {
+  if (typeof window === "undefined" || !isFiniteNumber(months) || months < 0) {
+    return null;
+  }
+
+  try {
+    const storedMonths = normalizeBaselineMonths(window.localStorage.getItem(BASELINE_MONTHS_STORAGE_KEY));
+    if (storedMonths !== null) {
+      return storedMonths;
+    }
+
+    window.localStorage.setItem(BASELINE_MONTHS_STORAGE_KEY, String(months));
+    return months;
+  } catch (error) {
+    console.warn(`[SimClient] Unable to write ${BASELINE_MONTHS_STORAGE_KEY}:`, error);
+    return null;
   }
 }
 
@@ -1245,9 +1288,9 @@ export default function SimulatorClient() {
   const [whatIfBaselineParams, setWhatIfBaselineParams] = useState<SimulationParams | null>(null);
   const [hasTouchedWhatIf, setHasTouchedWhatIf] = useState(false);
   const [baselineResult, setBaselineResult] = useState<BaselineResult | null>(null);
+  const [baselineMonths, setBaselineMonths] = useState<number | null>(null);
   const [, setLatestResult] = useState<BaselineResult | null>(null);
   const [resultFlow, setResultFlow] = useState<ResultFlow | null>(null);
-  const [copyFeedback, setCopyFeedback] = useState<"idle" | "copied" | "error">("idle");
   const [appliedAssumptionIds, setAppliedAssumptionIds] = useState<Set<string>>(() => new Set());
   const [keptAssumptionIds, setKeptAssumptionIds] = useState<Set<string>>(() => new Set());
   const [appliedSmartLeverId, setAppliedSmartLeverId] = useState<string | null>(null);
@@ -1267,6 +1310,7 @@ export default function SimulatorClient() {
 
   useEffect(() => {
     setBaselineResult(readStoredResult(BASELINE_RESULT_STORAGE_KEY));
+    setBaselineMonths(readStoredBaselineMonths());
     setLatestResult(readStoredResult(LATEST_RESULT_STORAGE_KEY));
   }, []);
 
@@ -1407,6 +1451,15 @@ export default function SimulatorClient() {
     };
   }, [chartData, resultMetrics, simulationData]);
 
+  const deltaMonths = useMemo(() => {
+    if (!resultMetrics || baselineMonths === null) {
+      return null;
+    }
+
+    const delta = resultMetrics.runwayMonths - baselineMonths;
+    return delta > 0 ? delta : null;
+  }, [baselineMonths, resultMetrics]);
+
   const rawSeriesKeys = useMemo(
     () => Array.from({ length: chartSummary?.sampleSize ?? 0 }, (_, index) => `sim${index}` as SimKey),
     [chartSummary?.sampleSize],
@@ -1537,34 +1590,6 @@ export default function SimulatorClient() {
     }));
   }, [readyParams, simulationParams, smartLevers]);
 
-  const shareLinks = useMemo<ShareLinkModel | null>(() => {
-    const verdict = shareCard?.verdict;
-
-    if (!simulationParams || !resultMetrics || !verdict) {
-      return null;
-    }
-
-    const sharePayload = {
-      runway: resultMetrics.runwayMonths,
-      survival: resultMetrics.survivalPercent,
-      verdict,
-      language: shareCard.language,
-      baselineRunway:
-        shareCard.hasDelta && shareCard.baselineRunwayValue !== null
-          ? Number.parseFloat(shareCard.baselineRunwayValue)
-          : undefined,
-      baselineSurvival:
-        shareCard.hasDelta && shareCard.baselineSurvivalValue !== null
-          ? Number.parseFloat(shareCard.baselineSurvivalValue)
-          : undefined,
-    };
-
-    return {
-      ogImagePath: getOgImagePath(sharePayload),
-      sharePagePath: getSharePagePath(sharePayload),
-    };
-  }, [resultMetrics, shareCard, simulationParams]);
-
   const serializedSimulationUrlParams = useMemo(() => {
     if (!simulationParams || !simulationData || !resultMetrics) {
       return null;
@@ -1598,6 +1623,11 @@ export default function SimulatorClient() {
       return;
     }
 
+    const storedBaselineMonths = writeStoredBaselineMonthsOnce(currentStoredResult.runwayMonths);
+    if (storedBaselineMonths !== null) {
+      setBaselineMonths(storedBaselineMonths);
+    }
+
     if (resultFlow === "parse") {
       setBaselineResult(currentStoredResult);
       setLatestResult(currentStoredResult);
@@ -1611,10 +1641,6 @@ export default function SimulatorClient() {
   }, [currentStoredResult, resultFlow]);
 
   useEffect(() => {
-    setCopyFeedback("idle");
-  }, [serializedSimulationUrlParams]);
-
-  useEffect(() => {
     if (!serializedSimulationUrlParams || typeof window === "undefined") {
       return;
     }
@@ -1623,15 +1649,6 @@ export default function SimulatorClient() {
     url.search = serializedSimulationUrlParams;
     window.history.replaceState(window.history.state, "", `${url.pathname}${url.search}${url.hash}`);
   }, [serializedSimulationUrlParams]);
-
-  useEffect(() => {
-    if (copyFeedback === "idle" || typeof window === "undefined") {
-      return;
-    }
-
-    const timeoutId = window.setTimeout(() => setCopyFeedback("idle"), 2200);
-    return () => window.clearTimeout(timeoutId);
-  }, [copyFeedback]);
 
   useEffect(() => {
     if (parseData?.status !== "ready") {
@@ -1831,22 +1848,6 @@ export default function SimulatorClient() {
     });
   }, [parseData, whatIfBaselineParams]);
 
-  async function handleCopyShareLink() {
-    if (!shareLinks || typeof window === "undefined" || !navigator.clipboard) {
-      setCopyFeedback("error");
-      return;
-    }
-
-    try {
-      const absoluteShareUrl = new URL(shareLinks.sharePagePath, window.location.origin);
-      await navigator.clipboard.writeText(absoluteShareUrl.toString());
-      setCopyFeedback("copied");
-    } catch (error) {
-      console.error("[SimClient] Unable to copy share URL:", error);
-      setCopyFeedback("error");
-    }
-  }
-
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
 
@@ -1956,24 +1957,6 @@ export default function SimulatorClient() {
   return (
     <div className="relative isolate min-h-screen overflow-hidden">
       <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_top_left,rgba(16,185,129,0.12),transparent_28%),radial-gradient(circle_at_78%_18%,rgba(255,255,255,0.06),transparent_22%),radial-gradient(circle_at_70%_78%,rgba(16,185,129,0.1),transparent_24%)]" />
-      {copyFeedback === "copied" ? (
-        <div
-          aria-live="polite"
-          className="fixed bottom-5 left-1/2 z-50 -translate-x-1/2 rounded-full border border-emerald-200/24 bg-[rgba(5,12,10,0.92)] px-5 py-3 text-sm font-medium text-emerald-100 shadow-[0_18px_70px_rgba(0,0,0,0.42)] backdrop-blur-xl"
-          role="status"
-        >
-          Link copied
-        </div>
-      ) : null}
-      {copyFeedback === "error" ? (
-        <div
-          aria-live="polite"
-          className="fixed bottom-5 left-1/2 z-50 -translate-x-1/2 rounded-full border border-red-200/24 bg-[rgba(20,6,6,0.92)] px-5 py-3 text-sm font-medium text-red-100 shadow-[0_18px_70px_rgba(0,0,0,0.42)] backdrop-blur-xl"
-          role="status"
-        >
-          Share link unavailable
-        </div>
-      ) : null}
 
       <div className="mx-auto flex min-h-screen max-w-7xl flex-col gap-4 px-4 py-4 sm:gap-6 sm:px-6 sm:py-6 lg:px-8">
         <header className={`${panelClass} order-2 relative overflow-hidden px-5 py-5 sm:px-6 sm:py-6 xl:order-1`}>
@@ -2498,16 +2481,10 @@ export default function SimulatorClient() {
                           <p className="share-card__verdict-text">{shareCard.verdict}</p>
                         </section>
 
-                        <div className="share-card__reality-check">
-                          <button
-                            className="share-card__reality-button"
-                            disabled={!shareLinks}
-                            onClick={handleCopyShareLink}
-                            type="button"
-                          >
-                            {shareCard.labels.shareButton}
-                          </button>
-                          {telegramLink ? (
+                        {deltaMonths !== null ? <DeltaShareCard deltaMonths={deltaMonths} /> : null}
+
+                        {telegramLink ? (
+                          <div className="share-card__reality-check">
                             <a
                               aria-label={`${shareCard.labels.telegramCta} ${telegramLink.startToken}`}
                               className="share-card__reality-button share-card__reality-button--telegram"
@@ -2517,8 +2494,8 @@ export default function SimulatorClient() {
                             >
                               {shareCard.labels.telegramCta}
                             </a>
-                          ) : null}
-                        </div>
+                          </div>
+                        ) : null}
 
                         {assumptionsUnderPressure ? (
                           <section
@@ -2664,31 +2641,6 @@ export default function SimulatorClient() {
                             </div>
                           )}
                         </section>
-
-                        {shareLinks ? (
-                          <section className="share-card__actions" aria-label="Share result">
-                            <a
-                              className="share-card__action-link"
-                              href={shareLinks.sharePagePath}
-                              rel="noreferrer"
-                              target="_blank"
-                            >
-                              Open share page
-                            </a>
-                            <a
-                              className="share-card__action-link"
-                              href={shareLinks.ogImagePath}
-                              rel="noreferrer"
-                              target="_blank"
-                            >
-                              Open OG image
-                            </a>
-                            <div className="share-card__actions-note">
-                              Verdict, runway, and survival now resolve through a dedicated share page with live
-                              server-side OG metadata.
-                            </div>
-                          </section>
-                        ) : null}
 
                         <footer className="share-card__footer">
                           <span>monterun.io</span>
@@ -3107,54 +3059,6 @@ export default function SimulatorClient() {
             font-weight: 600;
           }
 
-          .share-card__actions {
-            display: flex;
-            flex-wrap: wrap;
-            align-items: center;
-            gap: 12px;
-            padding-top: 6px;
-          }
-
-          .share-card__action-button,
-          .share-card__action-link {
-            display: inline-flex;
-            align-items: center;
-            justify-content: center;
-            min-height: 42px;
-            padding: 0 18px;
-            border-radius: 999px;
-            border: 1px solid var(--line);
-            background: linear-gradient(180deg, rgba(255, 255, 255, 0.03), rgba(255, 255, 255, 0.015));
-            color: var(--text-primary);
-            font-size: 0.8rem;
-            letter-spacing: 0.12em;
-            text-transform: uppercase;
-            text-decoration: none;
-            transition:
-              border-color 140ms ease,
-              background-color 140ms ease,
-              color 140ms ease;
-          }
-
-          .share-card__action-button {
-            cursor: pointer;
-          }
-
-          .share-card__action-button:hover,
-          .share-card__action-link:hover {
-            border-color: rgba(0, 255, 170, 0.28);
-            background: linear-gradient(180deg, rgba(0, 255, 170, 0.09), rgba(255, 255, 255, 0.02));
-            color: var(--accent);
-          }
-
-          .share-card__actions-note {
-            flex: 1 1 240px;
-            min-width: 0;
-            color: var(--text-secondary);
-            font-size: 0.84rem;
-            line-height: 1.5;
-          }
-
           @media (max-width: 920px) {
             .share-card {
               gap: 24px;
@@ -3189,15 +3093,6 @@ export default function SimulatorClient() {
 
             .share-card__header {
               padding-bottom: 12px;
-            }
-
-            .share-card__actions {
-              align-items: stretch;
-            }
-
-            .share-card__action-button,
-            .share-card__action-link {
-              width: 100%;
             }
 
             .share-card__runway {

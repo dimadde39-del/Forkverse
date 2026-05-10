@@ -2,16 +2,17 @@ import { expect, test } from '@playwright/test';
 
 const BASE_URL = process.env.MONTERUN_URL ?? 'https://monterun.vercel.app/';
 const SCENARIO =
-  'cash $8,000,000, monthly burn $950,000, monthly income $700,000, income starts in 3 months, horizon 18 months.';
+  'cash $20,000, monthly burn $8,000, monthly income $2,000, income starts immediately, horizon 18 months.';
+const BASELINE_STORAGE_KEY = 'monterun_baseline_months';
+const TARGET_MONTHLY_BURN = '4000';
 
 const PAGE_LOAD_TIMEOUT_MS = 30_000;
 const PARSE_RESPONSE_TIMEOUT_MS = 60_000;
 const RESULT_RENDER_TIMEOUT_MS = 15_000;
 const WHAT_IF_TIMEOUT_MS = 15_000;
-const SHARE_PAGE_TIMEOUT_MS = 20_000;
 
 test('MonteRun live happy path, what-if, and share flow', async ({ page }) => {
-  test.setTimeout(105_000);
+  test.setTimeout(90_000);
 
   const consoleMessages: string[] = [];
   page.on('console', (message) => {
@@ -22,6 +23,10 @@ test('MonteRun live happy path, what-if, and share flow', async ({ page }) => {
   page.on('pageerror', (error) => {
     consoleMessages.push(`pageerror: ${error.message}`);
   });
+
+  await page.addInitScript((storageKey) => {
+    window.localStorage.removeItem(storageKey);
+  }, BASELINE_STORAGE_KEY);
 
   await page.goto(BASE_URL, { waitUntil: 'networkidle', timeout: PAGE_LOAD_TIMEOUT_MS });
   await expect(
@@ -45,10 +50,18 @@ test('MonteRun live happy path, what-if, and share flow', async ({ page }) => {
   expect(parseResponse.ok(), `/api/parse returned ${parseResponse.status()}`).toBe(true);
 
   await expect(page.getByText('SIMULATED')).toBeVisible({ timeout: RESULT_RENDER_TIMEOUT_MS });
-  await expect(page.getByText('PLAN CAPTURED | CAPITAL 8000000')).toBeVisible();
+  await expect(page.getByText('PLAN CAPTURED | CAPITAL 20000')).toBeVisible();
   await expect(page.getByText(/SIMULATION COMPLETE \| SURVIVAL/i)).toBeVisible();
   await expect(page.getByText('1000 sims')).toBeVisible();
-  await expect(page.getByRole('button', { name: /\[ Share Reality Check \]/ })).toBeVisible();
+  await expect(page.getByRole('button', { name: /\[ Share Reality Check \]/ })).toHaveCount(0);
+  await expect(page.getByLabel('Delta Share Card')).toHaveCount(0);
+
+  const baselineMonths = await page.evaluate((storageKey) => {
+    return window.localStorage.getItem(storageKey);
+  }, BASELINE_STORAGE_KEY);
+  expect(baselineMonths).toBeTruthy();
+  expect(Number.isFinite(Number(baselineMonths))).toBe(true);
+  expect(Number(baselineMonths)).toBeGreaterThan(0);
 
   const parseTiming = await page.evaluate(() => {
     const parseRequest = performance
@@ -58,64 +71,35 @@ test('MonteRun live happy path, what-if, and share flow', async ({ page }) => {
     return parseRequest ? Math.round(parseRequest.duration) : null;
   });
 
-  await test.step('apply stress assumptions', async () => {
-    await page.getByRole('button', { name: 'Apply stress' }).first().click();
-    await expect(page.getByRole('button', { name: 'Applied' }).first()).toBeDisabled({
+  await test.step('apply burn improvement and verify X intent', async () => {
+    const monthlyBurnInput = page.getByRole('textbox', { name: /Monthly Burn precise value/i });
+    await monthlyBurnInput.fill(TARGET_MONTHLY_BURN);
+    await expect(monthlyBurnInput).toHaveValue(TARGET_MONTHLY_BURN, {
       timeout: WHAT_IF_TIMEOUT_MS,
     });
-
-    await page.getByRole('button', { name: 'Apply stress' }).click();
     await expect(page.getByText('WHAT-IF', { exact: true })).toBeVisible({ timeout: WHAT_IF_TIMEOUT_MS });
-    await expect(page.getByRole('textbox', { name: /Burn multiplier precise value/i })).toHaveValue('1.2', {
-      timeout: WHAT_IF_TIMEOUT_MS,
-    });
-    await expect(page).toHaveURL(/burn_multiplier=1\.2/, { timeout: WHAT_IF_TIMEOUT_MS });
-  });
 
-  await test.step('apply an escape route', async () => {
-    const burnReductionRoute = page.getByRole('button', {
-      name: /Burn\s+-\$\s*95,000\s+->\s+\$\s*855,000/i,
-    });
+    const deltaCard = page.getByLabel('Delta Share Card');
+    await expect(deltaCard).toBeVisible({ timeout: WHAT_IF_TIMEOUT_MS });
+    const deltaCopy = await deltaCard
+      .getByText(/You bought yourself \+\d+\.\d months of survival time\./)
+      .textContent();
+    const deltaMonths = deltaCopy?.match(/\+([0-9]+\.[0-9]) months/)?.[1];
+    expect(deltaMonths).toBeTruthy();
 
-    await burnReductionRoute.click();
-    await expect(page.getByRole('textbox', { name: /Monthly Burn precise value/i })).toHaveValue('855000', {
-      timeout: WHAT_IF_TIMEOUT_MS,
-    });
-    await expect(page.getByLabel('Escape Routes').getByRole('button', { name: /Applied/i })).toBeDisabled();
-  });
+    const shareHref = await deltaCard.getByRole('link', { name: 'Share to X' }).getAttribute('href');
+    expect(shareHref).toBeTruthy();
 
-  await test.step('verify share page and OG image', async () => {
-    const shareUrl = await page.getByRole('link', { name: 'Open share page' }).getAttribute('href');
-    expect(shareUrl).toBeTruthy();
+    const intentUrl = new URL(shareHref!);
+    expect(`${intentUrl.origin}${intentUrl.pathname}`).toBe('https://twitter.com/intent/tweet');
+    expect(intentUrl.searchParams.get('text')).toBe(
+      `I just crash-tested my freelance budget. By cutting the fat, I bought myself +${deltaMonths} months of survival time.\n\nCrash-test your own money here: https://monterun.vercel.app`,
+    );
 
-    await page.goto(new URL(shareUrl!, BASE_URL).toString(), {
-      waitUntil: 'domcontentloaded',
-      timeout: SHARE_PAGE_TIMEOUT_MS,
-    });
-    await expect(page.getByText('MonteRun share page')).toBeVisible({ timeout: SHARE_PAGE_TIMEOUT_MS });
-    await expect(page.getByText('Runway', { exact: true })).toBeVisible();
-    await expect(page.getByText('Survival 12m', { exact: true })).toBeVisible();
-
-    const verdictImage = page.locator('img[alt^="MonteRun verdict"]');
-    await expect(verdictImage).toBeVisible();
-    await expect
-      .poll(
-        async () =>
-          verdictImage.evaluate((img) => {
-            const image = img as HTMLImageElement;
-            return {
-              complete: image.complete,
-              naturalWidth: image.naturalWidth,
-              naturalHeight: image.naturalHeight,
-            };
-          }),
-        { timeout: SHARE_PAGE_TIMEOUT_MS },
-      )
-      .toEqual({
-        complete: true,
-        naturalWidth: 1200,
-        naturalHeight: 630,
-      });
+    const baselineAfterWhatIf = await page.evaluate((storageKey) => {
+      return window.localStorage.getItem(storageKey);
+    }, BASELINE_STORAGE_KEY);
+    expect(baselineAfterWhatIf).toBe(baselineMonths);
   });
 
   await test.info().attach('observed-parse-duration-ms', {

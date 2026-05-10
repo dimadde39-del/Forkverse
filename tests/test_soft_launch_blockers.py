@@ -119,12 +119,26 @@ class ShareOgGuardrailTests(unittest.TestCase):
         self.assertIn(".replace(/[\\u0000-\\u001f\\u007f<>]/g", source)
         self.assertIn("{verdict}", source)
 
-    def test_primary_share_cta_copies_share_page_url(self) -> None:
-        source = read_project_file("components/SimulatorClient.tsx")
+    def test_delta_share_card_uses_baseline_months_and_x_intent(self) -> None:
+        simulator = read_project_file("components/SimulatorClient.tsx")
+        delta_card = read_project_file("components/DeltaShareCard.tsx")
 
-        self.assertIn("new URL(shareLinks.sharePagePath, window.location.origin)", source)
-        self.assertNotIn("absoluteShareUrl.search = serializedSimulationUrlParams", source)
-        self.assertIn("disabled={!shareLinks}", source)
+        self.assertIn('const BASELINE_MONTHS_STORAGE_KEY = "monterun_baseline_months";', simulator)
+        self.assertIn("readStoredBaselineMonths", simulator)
+        self.assertIn("writeStoredBaselineMonthsOnce", simulator)
+        self.assertIn("window.localStorage.getItem(BASELINE_MONTHS_STORAGE_KEY)", simulator)
+        self.assertIn("return storedMonths;", simulator)
+        self.assertIn("<DeltaShareCard deltaMonths={deltaMonths} />", simulator)
+        self.assertNotIn("getSharePagePath", simulator)
+        self.assertNotIn("getOgImagePath", simulator)
+        self.assertNotIn("Open share page", simulator)
+        self.assertNotIn("Open OG image", simulator)
+
+        self.assertIn("You bought yourself +{formattedDelta} months of survival time.", delta_card)
+        self.assertIn("https://twitter.com/intent/tweet?text=", delta_card)
+        self.assertIn("encodeURIComponent(tweetText)", delta_card)
+        self.assertIn("I just crash-tested my freelance budget. By cutting the fat", delta_card)
+        self.assertIn("Crash-test your own money here: https://monterun.vercel.app", delta_card)
 
     def test_share_page_and_og_use_same_verdict_and_delta_params(self) -> None:
         share_card = read_project_file("app/lib/share-card.ts")
@@ -172,6 +186,7 @@ class ShareOgGuardrailTests(unittest.TestCase):
         forbidden = ("в", "†", "→", "↑", "↓")
         for path in (
             "components/SimulatorClient.tsx",
+            "components/DeltaShareCard.tsx",
             "app/share/page.tsx",
             "app/api/og/route.tsx",
         ):
