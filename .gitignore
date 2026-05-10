@@ -1,6 +1,9 @@
 .next
 node_modules
 .vercel
+supabase/.temp/
+output/
+*.tsbuildinfo
 .agents/vendor/
 .env
 .env.local

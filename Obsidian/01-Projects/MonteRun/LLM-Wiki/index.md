@@ -1,7 +1,7 @@
 ---
 type: llm-wiki-index
 project: MonteRun
-updated: 2026-05-08
+updated: 2026-05-10
 status: active
 owner: agent
 ---
@@ -50,8 +50,8 @@ Then use this index to open only the pages relevant to the task.
 | Page | Summary |
 | --- | --- |
 | [[01-Projects/MonteRun/LLM-Wiki/pages/UI/Main-Screen]] | Main screen hierarchy, first-screen input, chart, levers, verdict, and share affordances. |
-| [[01-Projects/MonteRun/LLM-Wiki/pages/Sharing/Delta-Share-Card]] | Baseline/latest state, share URL params, `/share`, and `/api/og`. |
-| [[01-Projects/MonteRun/LLM-Wiki/pages/Telegram/Drift-Alerts]] | Current Telegram retention loop through Supabase `user_alerts` and protected cron. |
+| [[01-Projects/MonteRun/LLM-Wiki/pages/Sharing/Delta-Share-Card]] | Browser `localStorage` baseline and client-side X/Twitter web intent sharing. |
+| [[01-Projects/MonteRun/LLM-Wiki/pages/Telegram/Drift-Alerts]] | Monthly Telegram retention loop through Supabase `user_alerts`, protected cron, and native `fetch`. |
 | [[01-Projects/MonteRun/LLM-Wiki/pages/Growth/Acquisition-Loop]] | Launch acquisition thesis and what the landing surface must communicate. |
 
 ## Decisions And Gaps

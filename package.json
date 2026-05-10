@@ -10,6 +10,7 @@
     "build": "next build",
     "start": "next start",
     "lint": "next lint",
+    "supabase:migrate:user-alerts": "node scripts/apply-supabase-migration.mjs supabase/migrations/202604290001_create_user_alerts.sql",
     "test:live:monterun": "playwright test output/playwright/monterun-live-smoke.spec.ts --browser=chromium"
   },
   "dependencies": {

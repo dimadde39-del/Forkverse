@@ -2,11 +2,11 @@ export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 const DRIFT_ALERT_TEXT =
-  "It's been a week. Is your startup still alive? Update your numbers.";
+  "Месяц назад ты обещал срезать расходы. Если ты этого не сделал, твой Runway падает. Жми сюда, чтобы пересчитать свою выживаемость: https://monterun.vercel.app";
+const DRIFT_ALERT_INTERVAL_MS = 30 * 24 * 60 * 60 * 1000;
 
 type UserAlertRow = {
   telegram_id: number;
-  last_runway_months: number | null;
 };
 
 type CronStats = {
@@ -57,7 +57,7 @@ async function fetchDueAlerts(
   cutoffIso: string,
 ) {
   const url = new URL("/rest/v1/user_alerts", supabaseUrl);
-  url.searchParams.set("select", "telegram_id,last_runway_months");
+  url.searchParams.set("select", "telegram_id");
   url.searchParams.set("created_at", `lt.${cutoffIso}`);
   url.searchParams.set("last_pinged_at", "is.null");
   url.searchParams.set("order", "created_at.asc");
@@ -138,7 +138,7 @@ export async function GET(request: Request) {
     return jsonResponse({ error: "Cron is not configured" }, 500);
   }
 
-  const cutoffIso = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString();
+  const cutoffIso = new Date(Date.now() - DRIFT_ALERT_INTERVAL_MS).toISOString();
   const stats: CronStats = {
     candidates: 0,
     sent: 0,

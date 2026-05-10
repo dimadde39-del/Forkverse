@@ -3,7 +3,7 @@ type: compiled-wiki-page
 project: MonteRun
 area: sharing
 status: active
-updated: 2026-05-08
+updated: 2026-05-10
 sources:
   - [[01-Projects/MonteRun/CURRENT-STATE]]
   - [[01-Projects/MonteRun/DECISIONS]]
@@ -14,24 +14,22 @@ sources:
 
 ## Current Synthesis
 
-Delta Share Card is a shipped launch surface. It is not a future idea. The app stores baseline/latest result state locally, pushes safe result metrics into share URL params, renders `/share`, and serves a dynamic `/api/og` image.
+Delta Share Card is a shipped launch surface. It is not a future idea. The app stores the baseline runway months locally in browser `localStorage` under `monterun_baseline_months`, renders `DeltaShareCard.tsx`, and shares positive runway deltas through a client-side X/Twitter web intent opened in a new tab.
 
 ## Current Behavior
 
-- Baseline/latest result state lives in browser localStorage.
-- Share URLs carry result metrics and verdict/delta state.
-- Share URLs should avoid serializing raw financial inputs.
-- `/share` renders a share page with server-side metadata.
-- `/api/og` renders the OG image.
-- Missing share params render a generic state instead of fake metrics.
+- Baseline runway months live in browser `localStorage`, not a server database.
+- The current storage key is `monterun_baseline_months`.
+- `DeltaShareCard.tsx` renders only for positive runway deltas.
+- The share action opens an X/Twitter web intent in a new tab.
+- The launch path does not generate `/api/og` cards, which keeps Vercel resource use low.
 
 ## What Agents Must Preserve
 
 - Do not turn share URLs into raw financial data dumps.
 - Keep the guardrail visible: simulation estimate, not financial advice.
-- Keep OG and share page labels consistent.
-- Keep edited URL snapshots treated as unverified records.
-- Prefer explicit result params over deriving fake metrics from missing inputs.
+- Do not move the baseline into a server database without an explicit product decision.
+- Do not route this lightweight share action through server-side card generation by default.
 
 ## Adjacent Pages
 

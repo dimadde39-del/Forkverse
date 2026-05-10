@@ -1,7 +1,7 @@
 ---
 type: llm-wiki-log
 project: MonteRun
-updated: 2026-05-08
+updated: 2026-05-10
 status: active
 owner: agent
 ---
@@ -13,6 +13,14 @@ Append-only timeline of LLM Wiki maintenance. Use headings that are easy to grep
 ```text
 ## [YYYY-MM-DD] action | short title
 ```
+
+## [2026-05-10] ingest | Monthly Telegram drift cron and Supabase migration path
+
+Updated canonical current-state/decision notes and the compiled Telegram Drift Alerts page after `/api/cron/drift` moved to a 30-day monthly reminder. Documented that production Supabase now has `public.user_alerts`, that the cron marks successful sends with `last_pinged_at`, and that local SQL migration execution uses `SUPABASE_DB_URL` with the free shared pooler rather than the paid dedicated IPv4 add-on.
+
+## [2026-05-10] ingest | Delta Share Card lightweight launch path
+
+Updated the compiled sharing and deterministic-pipeline pages after the shipped Delta Share Card implementation. The launch path now documents browser `localStorage` baseline storage under `monterun_baseline_months` and client-side X/Twitter web intent sharing without server-side `/api/og` card generation.
 
 ## [2026-05-08] bootstrap | Karpathy-style LLM Wiki v0
 

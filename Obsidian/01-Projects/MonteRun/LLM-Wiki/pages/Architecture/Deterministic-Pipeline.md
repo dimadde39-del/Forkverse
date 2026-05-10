@@ -3,7 +3,7 @@ type: compiled-wiki-page
 project: MonteRun
 area: architecture
 status: active
-updated: 2026-05-08
+updated: 2026-05-10
 sources:
   - [[01-Projects/MonteRun/PROJECT]]
   - [[01-Projects/MonteRun/CURRENT-STATE]]
@@ -24,7 +24,7 @@ Pipeline:
 3. Validation rejects unsupported or unsafe inputs before fake math is shown.
 4. Simulation core computes runway, survival probability, percentile paths, stress outcomes, and lever impact.
 5. Presentation layer renders verdict, chart, levers, share card, and Telegram handoff.
-6. Retention layer can send a lightweight 7-day drift prompt through Telegram.
+6. Retention layer can send a lightweight monthly drift prompt through Telegram.
 
 ## Responsibility Boundaries
 
@@ -33,21 +33,21 @@ Pipeline:
 | Parser / LLM | Extraction, short phrasing, language detection, clarification prompts | Probability, runway, lever impact, final math |
 | Simulation core | Monte Carlo paths, runway, survival, stress, lever math | Copy tone, product claims |
 | UI | Input, result rendering, chart, levers, share affordances | Math mutation outside explicit user controls |
-| Share/OG | URL snapshot rendering and share metadata | Raw financial input storage in share URLs |
-| Telegram | Lightweight drift alert registration and check-in | Multi-agent coaching chain |
+| Share | Client-side delta share intent and lightweight share metadata | Raw financial input storage or server-owned baseline state |
+| Telegram | Lightweight monthly drift alert registration and check-in | Multi-agent coaching chain |
 
 ## Current Shipped Surfaces
 
 - Fast parser extraction path.
-- Delta Share Card with baseline/latest state.
-- `/share` page and dynamic `/api/og` image.
-- Telegram Drift Alerts through Supabase `user_alerts` and protected cron.
+- Delta Share Card with browser `localStorage` baseline state.
+- Client-side X/Twitter web intent sharing without `/api/og` card generation.
+- Monthly Telegram Drift Alerts through Supabase `user_alerts` and protected cron.
 
 ## What Agents Must Preserve
 
 - Do not add another backend LLM hop.
 - Do not let verdict copy replace numeric output.
-- Do not serialize raw financial inputs into share URLs unless a future explicit decision changes the privacy model.
+- Do not move baseline state into server storage or serialize raw financial inputs unless a future explicit decision changes the privacy model.
 - Verify implementation when docs are older than code.
 
 ## Adjacent Pages
