@@ -1618,6 +1618,11 @@ export default function SimulatorClient() {
     };
   }, [resultMetrics]);
 
+  const currentCash = simulationParams?.initial_capital ?? null;
+  const monthlyBurn = simulationParams?.monthly_burn ?? null;
+  const targetFYouFund = monthlyBurn !== null ? monthlyBurn * 3 : null;
+  const fYouFundGap = targetFYouFund !== null && currentCash !== null ? targetFYouFund - currentCash : null;
+
   useEffect(() => {
     if (!currentStoredResult || !resultFlow) {
       return;
@@ -2479,6 +2484,19 @@ export default function SimulatorClient() {
                         <section className="share-card__verdict" aria-label={shareCard.labels.verdictAria}>
                           <div className="share-card__section-kicker">{shareCard.labels.verdict}</div>
                           <p className="share-card__verdict-text">{shareCard.verdict}</p>
+                          {fYouFundGap !== null ? (
+                            <p
+                              className={
+                                fYouFundGap > 0
+                                  ? "m-0 max-w-2xl text-sm leading-6 text-amber-400/90"
+                                  : "m-0 max-w-2xl text-sm leading-6 text-emerald-400"
+                              }
+                            >
+                              {fYouFundGap > 0
+                                ? `Твой F-You Fund пуст. Тебе нужно накопить еще ${fYouFundGap.toLocaleString()}, чтобы позволить себе роскошь послать токсичного клиента и спокойно искать нового 3 месяца.`
+                                : "Твой F-You Fund заряжен. Ты можешь хлопнуть дверью прямо сегодня и прожить 3 месяца без новых заказов."}
+                            </p>
+                          ) : null}
                         </section>
 
                         {deltaMonths !== null ? <DeltaShareCard deltaMonths={deltaMonths} /> : null}
