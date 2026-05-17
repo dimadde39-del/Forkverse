@@ -1,6 +1,6 @@
 import { ImageResponse } from "next/og";
 
-import { getShareLabels, type ShareLanguage } from "@/app/lib/share-card";
+import { formatRunwayLabel, getShareLabels, type ShareLanguage } from "@/app/lib/share-card";
 
 export const runtime = "edge";
 
@@ -83,11 +83,7 @@ function deriveRunwayMonths(capital: number, income: number, burn: number) {
 }
 
 function formatRunway(months: number) {
-  if (months >= 1_000) {
-    return "999+";
-  }
-
-  return formatMonths(months);
+  return formatRunwayLabel(months);
 }
 
 function formatMonths(months: number) {
@@ -230,8 +226,8 @@ export async function GET(request: Request) {
   const fallbackVerdict = hasDelta
     ? getDeltaVerdict(baselineSurvival, deltaRunwayMonths, language)
     : language === "ru"
-      ? `\u041c\u043e\u0439 \u0431\u0438\u0437\u043d\u0435\u0441 \u0443\u043c\u0438\u0440\u0430\u0435\u0442 \u0447\u0435\u0440\u0435\u0437 ${runwayLabel} \u043c\u0435\u0441. \u041f\u0440\u043e\u0432\u0435\u0440\u044c \u0441\u0432\u043e\u0439.`
-      : `My startup dies in ${runwayLabel} months. Beat that.`;
+      ? `\u041c\u043e\u0439 \u0431\u0438\u0437\u043d\u0435\u0441 \u0443\u043c\u0438\u0440\u0430\u0435\u0442 \u0447\u0435\u0440\u0435\u0437 ${runwayLabel}. \u041f\u0440\u043e\u0432\u0435\u0440\u044c \u0441\u0432\u043e\u0439.`
+      : `My startup dies in ${runwayLabel}. Beat that.`;
   const verdict = sanitizeText(
     searchParams.get("verdict"),
     fallbackVerdict,

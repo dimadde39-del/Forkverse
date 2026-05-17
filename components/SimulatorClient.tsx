@@ -676,7 +676,7 @@ function sanitizeSimulationParams(params: SimulationParams): SimulationParams {
     monthly_income: Math.max(0, Math.round(params.monthly_income)),
     income_delay_months: Math.min(MAX_INCOME_DELAY_MONTHS, months, Math.max(0, Math.round(incomeDelayMonths))),
     capital_shock: Math.max(0, Math.round(capitalShock)),
-    burn_multiplier: Math.max(0, Math.round(burnMultiplier * 100) / 100),
+    burn_multiplier: Math.max(0.5, Math.round(burnMultiplier * 100) / 100),
     months,
     n_simulations: Math.max(1, Math.min(4000, Math.round(params.n_simulations))),
   };
@@ -1038,29 +1038,15 @@ function setSimulationParamSearchParams(searchParams: URLSearchParams, params: S
 }
 
 function buildSimulationUrlSearchParams({
-  params,
-  baselineParams,
   simulationData,
   resultMetrics,
   shareCard,
-  currencySymbol,
 }: {
-  params: SimulationParams;
-  baselineParams: SimulationParams | null;
   simulationData: SimulationResponseData;
   resultMetrics: ResultMetricsViewModel;
   shareCard: ShareCardViewModel | null;
-  currencySymbol: string;
 }): URLSearchParams {
   const searchParams = new URLSearchParams();
-  const stress = getStressUrlState(params, baselineParams);
-
-  searchParams.set("mode", stress.mode);
-  searchParams.set("stress_mode", stress.mode);
-
-  if (stress.factors.length > 0) {
-    searchParams.set("stress_factors", stress.factors.join(","));
-  }
 
   searchParams.set("runway", formatUrlNumber(Math.round(resultMetrics.runwayMonths * 10) / 10));
   searchParams.set("survival", formatUrlPercent(resultMetrics.survivalPercent));
@@ -1071,21 +1057,14 @@ function buildSimulationUrlSearchParams({
     searchParams.set("verdict", clampText(simulationData.verdict, 140));
   }
 
-  if (shareCard?.comment) {
-    searchParams.set("comment", shareCard.comment);
-  } else if (simulationData.comment) {
-    searchParams.set("comment", clampText(simulationData.comment, 140));
-  }
-
   if (shareCard?.hasDelta && shareCard.baselineRunwayValue && shareCard.baselineSurvivalValue) {
     searchParams.set("baselineRunway", shareCard.baselineRunwayValue);
     searchParams.set("baselineSurvival", shareCard.baselineSurvivalValue);
   }
 
-  const topLever = simulationData.levers?.[0];
-  if (topLever) {
-    searchParams.set("top_lever", clampText(topLever.action, 80));
-    searchParams.set("top_lever_impact", formatUrlNumber(topLever.impact_months));
+  const language = shareCard?.language ?? simulationData.language;
+  if (language === "ru") {
+    searchParams.set("language", "ru");
   }
 
   return searchParams;
@@ -1116,13 +1095,13 @@ function CustomTooltip({ active, payload, currencySymbol }: CustomTooltipProps) 
       <div className="text-sm font-medium text-white">Month {point.month}</div>
       <div className="mt-3 space-y-1.5 text-[12px] text-white/78">
         <div className="font-mono tabular-nums text-emerald-200">
-          ▲ P90: {formatCurrencySigned(point.p90, currencySymbol)} (top 10%)
+          \u25b2 P90: {formatCurrencySigned(point.p90, currencySymbol)} (top 10%)
         </div>
         <div className="font-mono tabular-nums text-emerald-300">
-          ◆ P50: {formatCurrencySigned(point.p50, currencySymbol)} (median)
+          \u25c6 P50: {formatCurrencySigned(point.p50, currencySymbol)} (median)
         </div>
         <div className="font-mono tabular-nums text-white/72">
-          ▼ P10: {formatCurrencySigned(point.p10, currencySymbol)} (worst 10%)
+          \u25bc P10: {formatCurrencySigned(point.p10, currencySymbol)} (worst 10%)
         </div>
       </div>
       <div className="mt-3 border-t border-white/10 pt-3 font-mono text-[12px] text-white/64 tabular-nums">
@@ -1291,6 +1270,7 @@ export default function SimulatorClient() {
   const [baselineMonths, setBaselineMonths] = useState<number | null>(null);
   const [, setLatestResult] = useState<BaselineResult | null>(null);
   const [resultFlow, setResultFlow] = useState<ResultFlow | null>(null);
+  const [isDesktopChart, setIsDesktopChart] = useState<boolean | null>(null);
   const [appliedAssumptionIds, setAppliedAssumptionIds] = useState<Set<string>>(() => new Set());
   const [keptAssumptionIds, setKeptAssumptionIds] = useState<Set<string>>(() => new Set());
   const [appliedSmartLeverId, setAppliedSmartLeverId] = useState<string | null>(null);
@@ -1312,6 +1292,16 @@ export default function SimulatorClient() {
     setBaselineResult(readStoredResult(BASELINE_RESULT_STORAGE_KEY));
     setBaselineMonths(readStoredBaselineMonths());
     setLatestResult(readStoredResult(LATEST_RESULT_STORAGE_KEY));
+  }, []);
+
+  useEffect(() => {
+    const mediaQuery = window.matchMedia("(min-width: 768px)");
+    const syncChartMode = () => setIsDesktopChart(mediaQuery.matches);
+
+    syncChartMode();
+    mediaQuery.addEventListener("change", syncChartMode);
+
+    return () => mediaQuery.removeEventListener("change", syncChartMode);
   }, []);
 
   const smartLevers = useMemo<SmartLever[] | null>(() => {
@@ -1340,77 +1330,60 @@ export default function SimulatorClient() {
   }, [parseData?.smart_levers, simulationData?.levers]);
 
   const chartData = useMemo<MonteCarloChartPoint[]>(() => {
-    const trajectories = simulationData?.spaghetti_sample ?? [];
-
-    function processTrajectories(input: number[][]): MonteCarloChartPoint[] {
-      const sanitized = input.filter(
-        (path) => Array.isArray(path) && path.length > 1 && path.every((value) => Number.isFinite(value)),
-      );
-
-      if (sanitized.length === 0) {
-        return [];
-      }
-
-      const horizon = Math.min(...sanitized.map((path) => path.length - 1));
-      if (horizon <= 0) {
-        return [];
-      }
-
-      const percentile = (sorted: number[], percent: number): number => {
-        if (sorted.length === 0) {
-          return 0;
-        }
-
-        if (sorted.length === 1) {
-          return sorted[0];
-        }
-
-        const rank = ((sorted.length - 1) * percent) / 100;
-        const lower = Math.floor(rank);
-        const upper = Math.ceil(rank);
-
-        if (lower === upper) {
-          return sorted[lower];
-        }
-
-        const weight = rank - lower;
-        return sorted[lower] * (1 - weight) + sorted[upper] * weight;
-      };
-
-      return Array.from({ length: horizon }, (_, monthIndex) => {
-        const month = monthIndex + 1;
-        const monthValues = sanitized
-          .map((path) => path[month])
-          .filter((value): value is number => Number.isFinite(value))
-          .sort((left, right) => left - right);
-
-        const p10 = percentile(monthValues, 10);
-        const p50 = percentile(monthValues, 50);
-        const p90 = percentile(monthValues, 90);
-        const bankruptCount = sanitized.reduce((count, path) => {
-          const bankruptByNow = path.slice(1, month + 1).some((capital) => capital <= 0);
-          return count + (bankruptByNow ? 1 : 0);
-        }, 0);
-
-        const point: MonteCarloChartPoint = {
-          month,
-          p10,
-          p50,
-          p90,
-          band: [p10, p90],
-          bankruptcyRisk: (bankruptCount / sanitized.length) * 100,
-        };
-
-        sanitized.forEach((path, simIndex) => {
-          point[`sim${simIndex}` as SimKey] = path[month] ?? null;
-        });
-
-        return point;
-      });
+    if (!simulationData) {
+      return [];
     }
 
-    return processTrajectories(trajectories);
-  }, [simulationData?.spaghetti_sample]);
+    const pointCount = Math.min(
+      simulationData.months.length,
+      simulationData.p10.length,
+      simulationData.p50.length,
+      simulationData.p90.length,
+    );
+    const startIndex = pointCount > 1 && simulationData.months[0] === 0 ? 1 : 0;
+    const horizon = pointCount - startIndex;
+    if (horizon <= 0) {
+      return [];
+    }
+
+    const sanitizedPaths = simulationData.spaghetti_sample.filter(
+      (path) => Array.isArray(path) && path.length > startIndex && path.every((value) => Number.isFinite(value)),
+    );
+
+    return Array.from({ length: horizon }, (_, offset) => {
+      const sourceIndex = startIndex + offset;
+      const rawMonth = simulationData.months[sourceIndex];
+      const month = Number.isFinite(rawMonth) && rawMonth > 0 ? Math.round(rawMonth) : offset + 1;
+      const p10 = simulationData.p10[sourceIndex];
+      const p50 = simulationData.p50[sourceIndex];
+      const p90 = simulationData.p90[sourceIndex];
+
+      if (!Number.isFinite(p10) || !Number.isFinite(p50) || !Number.isFinite(p90) || p10 > p50 || p50 > p90) {
+        return null;
+      }
+
+      const bankruptCount = sanitizedPaths.reduce((count, path) => {
+        const cappedIndex = Math.min(sourceIndex, path.length - 1);
+        const bankruptByNow = path.slice(startIndex, cappedIndex + 1).some((capital) => capital <= 0);
+        return count + (bankruptByNow ? 1 : 0);
+      }, 0);
+
+      const point: MonteCarloChartPoint = {
+        month,
+        p10,
+        p50,
+        p90,
+        band: [p10, p90],
+        bankruptcyRisk: sanitizedPaths.length > 0 ? (bankruptCount / sanitizedPaths.length) * 100 : 0,
+      };
+
+      sanitizedPaths.forEach((path, simIndex) => {
+        point[`sim${simIndex}` as SimKey] = sourceIndex < path.length ? path[sourceIndex] : null;
+      });
+
+      return point;
+    }).filter((point): point is MonteCarloChartPoint => point !== null);
+  }, [simulationData]);
 
   const resultMetrics = useMemo<ResultMetricsViewModel | null>(() => {
     if (!simulationData || simulationData.base_runway_months === null) {
@@ -1446,7 +1419,7 @@ export default function SimulatorClient() {
       medianEndingBalance: lastPoint.p50,
       optimisticEndingBalance: lastPoint.p90,
       pessimisticEndingBalance: lastPoint.p10,
-      sampleSize: simulationData.spaghetti_sample.length,
+      sampleSize: Object.keys(lastPoint).filter((key) => key.startsWith("sim")).length,
       horizon: chartData.length,
     };
   }, [chartData, resultMetrics, simulationData]);
@@ -1466,21 +1439,7 @@ export default function SimulatorClient() {
   );
 
   const mobileChartData = useMemo<MonteCarloChartPoint[]>(() => {
-    if (chartData.length === 0) {
-      return [];
-    }
-
-    const firstOptimisticDepletedIndex = chartData.findIndex((point) => point.p90 <= 0);
-    const firstMedianDepletedIndex = chartData.findIndex((point) => point.p50 <= 0);
-    const depletionIndex =
-      firstOptimisticDepletedIndex >= 0 ? firstOptimisticDepletedIndex : firstMedianDepletedIndex;
-
-    if (depletionIndex < 0) {
-      return chartData;
-    }
-
-    const visibleMonthCount = Math.min(chartData.length, Math.max(6, depletionIndex + 4));
-    return chartData.slice(0, visibleMonthCount);
+    return chartData;
   }, [chartData]);
 
   const mobileRawSeriesKeys = useMemo(
@@ -1596,14 +1555,11 @@ export default function SimulatorClient() {
     }
 
     return buildSimulationUrlSearchParams({
-      params: simulationParams,
-      baselineParams: whatIfBaselineParams,
       simulationData,
       resultMetrics,
       shareCard,
-      currencySymbol,
     }).toString();
-  }, [currencySymbol, resultMetrics, shareCard, simulationData, simulationParams, whatIfBaselineParams]);
+  }, [resultMetrics, shareCard, simulationData, simulationParams]);
 
   const telegramLink = useMemo<TelegramLinkModel | null>(() => {
     const username = normalizeTelegramBotUsername(telegramBotUsername);
@@ -1679,6 +1635,7 @@ export default function SimulatorClient() {
   const isWhatIfDirty =
     Boolean(whatIfBaselineParams && readyParams) && !areSimulationParamsEqual(whatIfBaselineParams, readyParams);
   const isBusy = status === "parsing" || status === "simulating";
+  const hasDraftText = draft.trim().length > 0;
   const composerLabel = status === "clarifying" ? "Clarification" : "Scenario";
   const submitLabel =
     status === "clarifying"
@@ -1688,6 +1645,7 @@ export default function SimulatorClient() {
         : status === "simulating"
           ? "Simulating"
           : "Run simulation";
+  const isSubmitDisabled = isBusy || !hasDraftText;
   const statusLabel =
     status === "parsing"
       ? "READING"
@@ -1922,13 +1880,13 @@ export default function SimulatorClient() {
       const parserReadyMessage = createMessage(
         "ai",
         resultLanguage === "ru"
-          ? `ПЛАН ПРИНЯТ | КАПИТАЛ ${normalizedParseData.params.initial_capital} | РАСХОД ${normalizedParseData.params.monthly_burn} | ДОХОД ${normalizedParseData.params.monthly_income} | ЗАДЕРЖКА ${normalizedParseData.params.income_delay_months}М`
+          ? `\u041f\u041b\u0410\u041d \u041f\u0420\u0418\u041d\u042f\u0422 | \u041a\u0410\u041f\u0418\u0422\u0410\u041b ${normalizedParseData.params.initial_capital} | \u0420\u0410\u0421\u0425\u041e\u0414 ${normalizedParseData.params.monthly_burn} | \u0414\u041e\u0425\u041e\u0414 ${normalizedParseData.params.monthly_income} | \u0417\u0410\u0414\u0415\u0420\u0416\u041a\u0410 ${normalizedParseData.params.income_delay_months}\u041c`
           : `PLAN CAPTURED | CAPITAL ${normalizedParseData.params.initial_capital} | BURN ${normalizedParseData.params.monthly_burn} | INCOME ${normalizedParseData.params.monthly_income} | DELAY ${normalizedParseData.params.income_delay_months}M`,
       );
       const simulationCompleteMessage = createMessage(
         "ai",
         resultLanguage === "ru"
-          ? `СИМУЛЯЦИЯ ГОТОВА | ВЫЖИВАЕМОСТЬ ${normalizeProbabilityPercent(
+          ? `\u0421\u0418\u041c\u0423\u041b\u042f\u0426\u0418\u042f \u0413\u041e\u0422\u041e\u0412\u0410 | \u0412\u042b\u0416\u0418\u0412\u0410\u0415\u041c\u041e\u0421\u0422\u042c ${normalizeProbabilityPercent(
               normalizedSimulationData.survival_probability_12m ?? normalizedSimulationData.survival_probability,
             ).toFixed(1)}%`
           : `SIMULATION COMPLETE | SURVIVAL ${normalizeProbabilityPercent(
@@ -2041,13 +1999,14 @@ export default function SimulatorClient() {
                       ? "Enter the answer to the clarification question..."
                       : "I have $5,000, no job, $2,000/mo expenses, starting freelance work..."
                   }
+                  required
                   spellCheck={false}
                   value={draft}
                 />
                 <div className="flex flex-wrap items-center gap-3">
                   <button
                     className="inline-flex items-center rounded-full border border-white/10 bg-emerald-400/12 px-4 py-2.5 text-sm font-medium text-emerald-200 transition hover:bg-emerald-400/16 disabled:cursor-not-allowed disabled:bg-white/5 disabled:text-white/38"
-                    disabled={isBusy}
+                    disabled={isSubmitDisabled}
                     type="submit"
                   >
                     {submitLabel}
@@ -2169,6 +2128,7 @@ export default function SimulatorClient() {
                       </div>
                     </div>
 
+                    {isDesktopChart === false ? (
                     <div className="md:hidden">
                       <div className="relative h-[315px] min-h-[315px] min-w-0 overflow-hidden rounded-[22px] border border-white/10 bg-[radial-gradient(circle_at_24%_12%,rgba(16,185,129,0.13),transparent_36%),linear-gradient(180deg,rgba(255,255,255,0.04),rgba(255,255,255,0.012))] px-1.5 py-2 shadow-[inset_0_1px_0_rgba(255,255,255,0.05),0_0_38px_rgba(16,185,129,0.05)]">
                         {whatIfSimulation.isPending ? (
@@ -2288,7 +2248,9 @@ export default function SimulatorClient() {
                         </ResponsiveContainer>
                       </div>
                     </div>
+                    ) : null}
 
+                    {isDesktopChart === true ? (
                     <div className="hidden md:block">
                       <div className="relative h-[380px] min-h-[380px] min-w-0 overflow-hidden rounded-[28px] border border-white/10 bg-[radial-gradient(circle_at_top_left,rgba(16,185,129,0.10),transparent_32%),linear-gradient(180deg,rgba(255,255,255,0.04),rgba(255,255,255,0.01))] p-2 lg:h-[430px] lg:min-h-[430px]">
                         {whatIfSimulation.isPending ? (
@@ -2407,6 +2369,7 @@ export default function SimulatorClient() {
                         </ResponsiveContainer>
                       </div>
                     </div>
+                    ) : null}
 
                     {shareCard ? (
                       <article className="share-card" aria-label={shareCard.labels.cardAria}>
@@ -2493,8 +2456,8 @@ export default function SimulatorClient() {
                               }
                             >
                               {fYouFundGap > 0
-                                ? `Твой F-You Fund пуст. Тебе нужно накопить еще ${fYouFundGap.toLocaleString()}, чтобы позволить себе роскошь послать токсичного клиента и спокойно искать нового 3 месяца.`
-                                : "Твой F-You Fund заряжен. Ты можешь хлопнуть дверью прямо сегодня и прожить 3 месяца без новых заказов."}
+                                ? `\u0422\u0432\u043e\u0439 F-You Fund \u043f\u0443\u0441\u0442. \u0422\u0435\u0431\u0435 \u043d\u0443\u0436\u043d\u043e \u043d\u0430\u043a\u043e\u043f\u0438\u0442\u044c \u0435\u0449\u0435 ${fYouFundGap.toLocaleString()}, \u0447\u0442\u043e\u0431\u044b \u043f\u043e\u0437\u0432\u043e\u043b\u0438\u0442\u044c \u0441\u0435\u0431\u0435 \u0440\u043e\u0441\u043a\u043e\u0448\u044c \u043f\u043e\u0441\u043b\u0430\u0442\u044c \u0442\u043e\u043a\u0441\u0438\u0447\u043d\u043e\u0433\u043e \u043a\u043b\u0438\u0435\u043d\u0442\u0430 \u0438 \u0441\u043f\u043e\u043a\u043e\u0439\u043d\u043e \u0438\u0441\u043a\u0430\u0442\u044c \u043d\u043e\u0432\u043e\u0433\u043e 3 \u043c\u0435\u0441\u044f\u0446\u0430.`
+                                : "\u0422\u0432\u043e\u0439 F-You Fund \u0437\u0430\u0440\u044f\u0436\u0435\u043d. \u0422\u044b \u043c\u043e\u0436\u0435\u0448\u044c \u0445\u043b\u043e\u043f\u043d\u0443\u0442\u044c \u0434\u0432\u0435\u0440\u044c\u044e \u043f\u0440\u044f\u043c\u043e \u0441\u0435\u0433\u043e\u0434\u043d\u044f \u0438 \u043f\u0440\u043e\u0436\u0438\u0442\u044c 3 \u043c\u0435\u0441\u044f\u0446\u0430 \u0431\u0435\u0437 \u043d\u043e\u0432\u044b\u0445 \u0437\u0430\u043a\u0430\u0437\u043e\u0432."}
                             </p>
                           ) : null}
                         </section>

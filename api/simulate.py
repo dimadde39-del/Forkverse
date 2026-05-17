@@ -14,6 +14,8 @@ import numpy as np
 
 SCHEMA_VERSION: Final[str] = "2026-04"
 MAX_PAYLOAD_BYTES: Final[int] = 1_000_000
+DEFAULT_SIMULATION_MONTHS: Final[int] = 24
+MIN_SURVIVAL_LABEL_MONTHS: Final[int] = 12
 MAX_SIMULATION_MONTHS: Final[int] = 240
 INCOME_DELAY_MONTHS_FIELD: Final[str] = "income_delay_months"
 CAPITAL_SHOCK_FIELD: Final[str] = "capital_shock"
@@ -208,7 +210,13 @@ def _coerce_non_negative_float(name: str, value: Any, *, default: float = 0.0) -
     return coerced
 
 
-def _coerce_positive_int(name: str, value: Any, *, maximum: int | None = None) -> int:
+def _coerce_positive_int(
+    name: str,
+    value: Any,
+    *,
+    minimum: int = 1,
+    maximum: int | None = None,
+) -> int:
     if isinstance(value, bool):
         raise ApiProblem(
             "INVALID_PARAMS",
@@ -235,11 +243,11 @@ def _coerce_positive_int(name: str, value: Any, *, maximum: int | None = None) -
             False,
         )
 
-    if coerced < 1:
+    if coerced < minimum:
         raise ApiProblem(
             "INVALID_PARAMS",
-            f"{name} must be a positive integer",
-            {"field": name, "reason": "below_minimum", "minimum": 1},
+            f"{name} must be >= {minimum}",
+            {"field": name, "reason": "below_minimum", "minimum": minimum},
             False,
         )
 
@@ -436,12 +444,12 @@ class handler(BaseHTTPRequestHandler):
             normalized_params.get(BURN_MULTIPLIER_FIELD),
             default=1.0,
         )
-        if "months" in normalized_params:
-            normalized_params["months"] = _coerce_positive_int(
-                "months",
-                normalized_params.get("months"),
-                maximum=MAX_SIMULATION_MONTHS,
-            )
+        normalized_params["months"] = _coerce_positive_int(
+            "months",
+            normalized_params.get("months", DEFAULT_SIMULATION_MONTHS),
+            minimum=MIN_SURVIVAL_LABEL_MONTHS,
+            maximum=MAX_SIMULATION_MONTHS,
+        )
 
         return normalized_params
 

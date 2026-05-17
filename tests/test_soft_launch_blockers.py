@@ -110,6 +110,18 @@ class SimulationGuardrailTests(unittest.TestCase):
         self.assertEqual(caught.exception.code, "INVALID_PARAMS")
         self.assertEqual(caught.exception.details["reason"], "above_maximum")
 
+    def test_simulate_api_defaults_to_12m_safe_horizon(self) -> None:
+        params = simulate_api.handler._extract_params(None, {"params": {}})
+
+        self.assertEqual(params["months"], simulate_api.DEFAULT_SIMULATION_MONTHS)
+
+    def test_simulate_api_rejects_short_horizon_for_12m_survival_label(self) -> None:
+        with self.assertRaises(simulate_api.ApiProblem) as caught:
+            simulate_api.handler._extract_params(None, {"params": {"months": 1}})
+
+        self.assertEqual(caught.exception.code, "INVALID_PARAMS")
+        self.assertEqual(caught.exception.details["minimum"], simulate_api.MIN_SURVIVAL_LABEL_MONTHS)
+
 
 class ShareOgGuardrailTests(unittest.TestCase):
     def test_og_route_sanitizes_and_renders_supplied_verdict(self) -> None:
@@ -161,6 +173,71 @@ class ShareOgGuardrailTests(unittest.TestCase):
         self.assertNotIn("capital: simulationParams.initial_capital", simulator)
         self.assertNotIn("income: simulationParams.monthly_income", simulator)
         self.assertNotIn("burn: simulationParams.monthly_burn", simulator)
+
+    def test_browser_result_url_uses_share_safe_params_only(self) -> None:
+        simulator = read_project_file("components/SimulatorClient.tsx")
+        build_url_source = simulator[
+            simulator.index("function buildSimulationUrlSearchParams") : simulator.index(
+                "function normalizeTelegramBotUsername"
+            )
+        ]
+
+        for private_param in (
+            'searchParams.set("comment"',
+            'searchParams.set("top_lever"',
+            'searchParams.set("top_lever_impact"',
+            'searchParams.set("mode"',
+            'searchParams.set("stress_mode"',
+            'searchParams.set("capital"',
+            'searchParams.set("income"',
+            'searchParams.set("burn"',
+        ):
+            self.assertNotIn(private_param, build_url_source)
+
+        self.assertIn('searchParams.set("runway"', build_url_source)
+        self.assertIn('searchParams.set("survival"', build_url_source)
+        self.assertIn('searchParams.set("verdict"', build_url_source)
+        self.assertIn('searchParams.set("language", "ru")', build_url_source)
+
+    def test_chart_uses_api_percentiles_not_sample_recomputed_quantiles(self) -> None:
+        simulator = read_project_file("components/SimulatorClient.tsx")
+        chart_source = simulator[
+            simulator.index("const chartData = useMemo") : simulator.index("const resultMetrics = useMemo")
+        ]
+
+        self.assertIn("simulationData.p10[sourceIndex]", chart_source)
+        self.assertIn("simulationData.p50[sourceIndex]", chart_source)
+        self.assertIn("simulationData.p90[sourceIndex]", chart_source)
+        self.assertNotIn("const percentile = ", chart_source)
+
+    def test_mobile_chart_keeps_full_horizon(self) -> None:
+        simulator = read_project_file("components/SimulatorClient.tsx")
+        mobile_source = simulator[
+            simulator.index("const mobileChartData = useMemo") : simulator.index("const mobileRawSeriesKeys = useMemo")
+        ]
+
+        self.assertIn("return chartData;", mobile_source)
+        self.assertNotIn(".slice(0, visibleMonthCount)", mobile_source)
+
+    def test_only_visible_breakpoint_chart_is_mounted(self) -> None:
+        simulator = read_project_file("components/SimulatorClient.tsx")
+
+        self.assertIn('window.matchMedia("(min-width: 768px)")', simulator)
+        self.assertIn("isDesktopChart === false", simulator)
+        self.assertIn("isDesktopChart === true", simulator)
+
+    def test_empty_submit_is_disabled_before_parse(self) -> None:
+        simulator = read_project_file("components/SimulatorClient.tsx")
+
+        self.assertIn("const hasDraftText = draft.trim().length > 0;", simulator)
+        self.assertIn("const isSubmitDisabled = isBusy || !hasDraftText;", simulator)
+        self.assertIn("disabled={isSubmitDisabled}", simulator)
+
+    def test_og_uses_share_page_runway_formatter(self) -> None:
+        og_route = read_project_file("app/api/og/route.tsx")
+
+        self.assertIn("formatRunwayLabel", og_route)
+        self.assertNotIn('"999+"', og_route)
 
     def test_missing_share_url_renders_generic_state_instead_of_fake_metrics(self) -> None:
         share_page = read_project_file("app/share/page.tsx")

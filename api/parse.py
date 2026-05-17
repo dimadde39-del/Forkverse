@@ -94,13 +94,34 @@ SMART_LEVER_PATCH_FIELDS: Final[frozenset[str]] = frozenset(
     }
 )
 MILLION_MULTIPLIER: Final[int] = 1_000_000
+MONEY_SUFFIX_MULTIPLIERS: Final[dict[str, int]] = {
+    "k": 1_000,
+    "m": 1_000_000,
+    "mn": 1_000_000,
+    "mil": 1_000_000,
+    "million": 1_000_000,
+    "millions": 1_000_000,
+    "b": 1_000_000_000,
+    "bn": 1_000_000_000,
+    "billion": 1_000_000_000,
+    "billions": 1_000_000_000,
+}
 MONEY_MILLION_SUFFIX_RE: Final[re.Pattern[str]] = re.compile(
     r"(?P<number>\d+(?:[.,]\d+)?)\s*(?P<suffix>🍋|лимон(?:а|ов)?|лям(?:а|ов)?|млн|миллион(?:а|ов)?)",
     re.IGNORECASE,
 )
+ENGLISH_MONEY_SUFFIX_RE: Final[re.Pattern[str]] = re.compile(
+    r"^\s*[$€£₸₽]?\s*(?P<number>[+-]?\d+(?:[.,]\d+)?)"
+    r"(?:(?P<compact_suffix>[kmb])|\s+(?P<word_suffix>mn|mil|million|millions|bn|billion|billions))\s*$",
+    re.IGNORECASE,
+)
+SCIENTIFIC_NUMBER_RE: Final[re.Pattern[str]] = re.compile(
+    r"^\s*[$€£₸₽]?\s*(?P<number>[+-]?(?:\d+(?:\.\d*)?|\.\d+)e[+-]?\d+)\s*$",
+    re.IGNORECASE,
+)
 CYRILLIC_RE: Final[re.Pattern[str]] = re.compile(r"[\u0400-\u04FF]")
 NO_INCOME_RE: Final[re.Pattern[str]] = re.compile(
-    r"(нет\s+поступлен(?:ия|ий)|нет\s+дохода|не\s+работаю|уволилась|уволился)",
+    r"(нет\s+поступлен(?:ия|ий)|нет\s+дохода|не\s+работаю|уволилась|уволился|\b(?:no|zero)\s+(?:income|revenue)\b|\bno\s+job\b|\bunemployed\b|\blaid\s+off\b|\bnot\s+working\b)",
     re.IGNORECASE,
 )
 ZERO_EXPENSES_RE: Final[re.Pattern[str]] = re.compile(
@@ -108,11 +129,11 @@ ZERO_EXPENSES_RE: Final[re.Pattern[str]] = re.compile(
     re.IGNORECASE,
 )
 UNSUPPORTED_CURRENCY_RE: Final[re.Pattern[str]] = re.compile(
-    r"(₸|₽|€|£|тенге\b|руб(?:\.|лей\b|ля\b|ль\b|\b)|\b(?:kzt|rub|eur|gbp)\b)",
+    r"(₸|₽|€|£|тенге\b|теңге\b|тг\b|тнг\b|tenge\b|tg\b|руб(?:\.|лей\b|ля\b|ль\b|\b)|\b(?:kzt|rub|eur|gbp)\b)",
     re.IGNORECASE,
 )
 BUSINESS_OPENING_RE: Final[re.Pattern[str]] = re.compile(
-    r"(открыть\s+бизнес|открыть\s+фаст\s*фуд|запустить\s+бизнес|start\s+(?:a\s+)?business|open\s+(?:a\s+)?business|launch\s+(?:a\s+)?business)",
+    r"(открыть\s+бизнес|открыть\s+фаст\s*фуд|запустить\s+бизнес|start\s+(?:a\s+)?(?:business|startup|company|shop|restaurant|cafe|agency|store)|open\s+(?:a\s+)?(?:business|company|shop|restaurant|cafe|agency|store)|launch\s+(?:a\s+)?(?:business|startup|company|shop|restaurant|cafe|agency|store))",
     re.IGNORECASE,
 )
 MISSING_EXPENSES_MESSAGE_BY_LANGUAGE: Final[dict[str, str]] = {
@@ -414,7 +435,17 @@ def _parse_plain_numeric_string(value: str) -> float:
     if not normalized:
         raise ValueError("empty string")
 
-    normalized = re.sub(r"[^\d,.\-]", "", normalized)
+    scientific_match = SCIENTIFIC_NUMBER_RE.fullmatch(normalized.replace(",", ""))
+    if scientific_match is not None:
+        return float(scientific_match.group("number"))
+
+    normalized = re.sub(r"^\s*[$€£₸₽]\s*", "", normalized)
+    normalized = re.sub(r"\s*(?:usd|dollars?|bucks?)\s*$", "", normalized, flags=re.IGNORECASE)
+    if re.search(r"[A-Za-z\u0400-\u04FF]", normalized):
+        raise ValueError("unsupported numeric suffix")
+
+    normalized = re.sub(r"[\s_]", "", normalized)
+    normalized = re.sub(r"[^\d,.\-+]", "", normalized)
     if not normalized:
         raise ValueError("no numeric content")
 
@@ -430,7 +461,25 @@ def _parse_plain_numeric_string(value: str) -> float:
     return float(normalized)
 
 
+def _parse_english_money_suffix_amount(value: str) -> float | None:
+    match = ENGLISH_MONEY_SUFFIX_RE.fullmatch(value)
+    if match is None:
+        return None
+
+    suffix = (match.group("compact_suffix") or match.group("word_suffix") or "").casefold()
+    multiplier = MONEY_SUFFIX_MULTIPLIERS.get(suffix)
+    if multiplier is None:
+        return None
+
+    amount = _parse_plain_numeric_string(match.group("number"))
+    return amount * multiplier
+
+
 def _parse_money_slang_amount(value: str) -> float | None:
+    english_amount = _parse_english_money_suffix_amount(value)
+    if english_amount is not None:
+        return english_amount
+
     match = MONEY_MILLION_SUFFIX_RE.search(value)
     if match is None:
         return None
@@ -470,7 +519,13 @@ def _normalize_result_language(value: Any) -> str:
 
 
 def _detect_result_language(text: str | None) -> str:
-    return RUSSIAN_RESULT_LANGUAGE if CYRILLIC_RE.search(_extract_parser_user_text(text)) else DEFAULT_RESULT_LANGUAGE
+    user_text = _extract_parser_user_text(text)
+    if CYRILLIC_RE.search(user_text):
+        return RUSSIAN_RESULT_LANGUAGE
+    if re.search(r"[A-Za-z]", user_text):
+        return DEFAULT_RESULT_LANGUAGE
+
+    return RUSSIAN_RESULT_LANGUAGE if CYRILLIC_RE.search(text or "") else DEFAULT_RESULT_LANGUAGE
 
 
 def _result_language_instruction(language: str) -> str:
@@ -1361,6 +1416,8 @@ def _extract_context_params(parser_input: str) -> dict[str, Any] | None:
 def _merge_extracted_params(
     raw_params: Any,
     fallback_params: Mapping[str, Any] | None,
+    *,
+    include_raw_optional_params: bool = True,
 ) -> dict[str, Any]:
     merged: dict[str, Any] = dict(fallback_params or {})
 
@@ -1374,10 +1431,11 @@ def _merge_extracted_params(
         if income_delay_months is not None:
             merged[INCOME_DELAY_MONTHS_FIELD] = income_delay_months
 
-        for field in MONTE_RUN_OPTIONAL_PARAM_FIELDS:
-            value = raw_params.get(field)
-            if value is not None:
-                merged[field] = value
+        if include_raw_optional_params:
+            for field in MONTE_RUN_OPTIONAL_PARAM_FIELDS:
+                value = raw_params.get(field)
+                if value is not None:
+                    merged[field] = value
 
         currency_symbol = raw_params.get(CURRENCY_SYMBOL_FIELD)
         if currency_symbol is not None:
@@ -1416,11 +1474,17 @@ def _monthly_expenses_are_missing(value: Mapping[str, Any], parser_input: str | 
     if monthly_burn > 0.0:
         return False
 
+    if _describes_opening_business(parser_input):
+        return True
+
     return not _has_explicit_zero_expenses(parser_input)
 
 
-def _fill_known_expense_component_defaults(value: Mapping[str, Any]) -> dict[str, Any]:
+def _fill_known_expense_component_defaults(value: Mapping[str, Any], parser_input: str | None = None) -> dict[str, Any]:
     filled = dict(value)
+    if not _has_explicit_zero_expenses(parser_input):
+        return filled
+
     if filled.get("fixed_expenses") is None and filled.get("flexible_expenses") is not None:
         filled["fixed_expenses"] = 0.0
     if filled.get("flexible_expenses") is None and filled.get("fixed_expenses") is not None:
@@ -1678,7 +1742,9 @@ def _normalize_extraction_payload(
 
     language = _detect_result_language(parser_input) if parser_input is not None else _normalize_result_language(payload.get(RESULT_LANGUAGE_FIELD))
     raw_params = payload.get("params")
-    merged_params = _merge_extracted_params(raw_params, fallback_params)
+    merged_params = _merge_extracted_params(raw_params, fallback_params, include_raw_optional_params=False)
+    for field in MONTE_RUN_OPTIONAL_PARAM_FIELDS:
+        merged_params.pop(field, None)
 
     if _has_explicit_no_income(parser_input):
         merged_params["monthly_income"] = 0.0
@@ -1702,7 +1768,7 @@ def _normalize_extraction_payload(
             parser_input=parser_input,
         )
 
-    merged_params = _fill_known_expense_component_defaults(merged_params)
+    merged_params = _fill_known_expense_component_defaults(merged_params, parser_input)
     missing_fields = _missing_param_fields(merged_params)
     if missing_fields:
         question = payload.get("question")

@@ -108,7 +108,7 @@ function formatMultiplier(value: number): string {
 
 function clampSliderValue(key: EditableParamKey, value: number, params: WhatIfSimulationParams): number {
   if (key === "burn_multiplier") {
-    return Math.max(0, Math.min(4, Math.round(value * 100) / 100));
+    return Math.max(0.5, Math.min(4, Math.round(value * 100) / 100));
   }
 
   const rounded = Math.max(0, Math.round(value));
@@ -145,7 +145,7 @@ function sanitizeManualInputValue(
   }
 
   if (key === "burn_multiplier") {
-    return Math.min(Math.max(0, Math.round(parsedValue * 100) / 100), getManualInputMax(key, params));
+    return Math.min(Math.max(0.5, Math.round(parsedValue * 100) / 100), getManualInputMax(key, params));
   }
 
   const roundedValue = Math.round(parsedValue);
@@ -317,7 +317,7 @@ export default function WhatIfControls({
       return;
     }
 
-    const sanitizedValue = sanitizeManualInputValue(key, manualInputValues[key], params) ?? 0;
+    const sanitizedValue = sanitizeManualInputValue(key, manualInputValues[key], params) ?? (key === "burn_multiplier" ? 0.5 : 0);
 
     setManualInputValues((previousValues) => ({
       ...previousValues,
